@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: sonoran_hub
+      POSTGRES_USER: sonoran_hub
+      POSTGRES_PASSWORD: sonoran_hub
+    ports:
+      - '5432:5432'
+    volumes:
+      - sonoran-hub-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U sonoran_hub -d sonoran_hub']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  sonoran-hub-postgres:

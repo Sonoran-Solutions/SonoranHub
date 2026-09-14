@@ -73,6 +73,25 @@ packages/
 
 The provider adapters and GitHub integration are boundaries, not places for product/business logic. Routing logic consumes normalized provider and task data from those boundaries.
 
+### Capacity vertical slice
+
+The first end-to-end Capacity path is:
+
+```text
+OpenRouter / DeepSeek adapters
+  -> CapacityCoordinator and D1 scheduler
+  -> CapacityService
+  -> CapacitySnapshotStore -> PostgreSQL
+  -> Fastify GET /capacity and /capacity/history
+  -> React /capacity view
+```
+
+The coordinator records probe health independently from collection. A failed
+probe is not a generic collection gate because an adapter may still produce
+useful partial or derived resources. In particular, DeepSeek pricing is
+derived from verified UTC configuration even when its authenticated wallet
+request is unavailable.
+
 ## 3. Hub API responsibilities
 
 The API owns:

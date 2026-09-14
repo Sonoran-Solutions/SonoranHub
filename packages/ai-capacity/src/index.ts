@@ -13,6 +13,18 @@ export {
 export { CapacityAdapterRegistry } from './registry.js';
 export { CapacityRefreshScheduler, type RefreshSchedulerOptions } from './scheduler.js';
 export {
+  canonicalizeCapacitySnapshot,
+  CapacitySnapshotStoreError,
+  CapacitySnapshotValidationError,
+  DEFAULT_HISTORY_LIMIT,
+  InMemoryCapacitySnapshotStore,
+  MAX_HISTORY_LIMIT,
+  PostgresCapacitySnapshotStore,
+  type CapacitySnapshotHistoryOptions,
+  type CapacitySnapshotStore,
+} from './snapshot-store.js';
+export { CapacityService, type CapacityServiceOptions } from './service.js';
+export {
   DEEPSEEK_PROVIDER_ID,
   DeepSeekCapacityAdapter,
   type DeepSeekCapacityAdapterOptions,
@@ -54,6 +66,7 @@ export {
 } from './providers/openrouter/index.js';
 export type {
   AdapterAvailability,
+  CapacityRefreshTarget,
   CapacityEvent,
   CapacityEventListener,
   CapacityProviderAdapter,

@@ -49,6 +49,8 @@ export interface CollectionSuccess {
   readonly attemptedAt: string;
   readonly collectedAt: string;
   readonly resources: readonly CapacityResource[];
+  /** A non-fatal collector error accompanying usable partial resources. */
+  readonly error?: ProviderFailure;
 }
 
 export interface CollectionFailure {
@@ -66,7 +68,15 @@ export interface ProviderHealth {
   readonly lastProbe?: ProbeResult;
   readonly lastCollectionAttempt?: string;
   readonly lastSuccessfulCollection?: string;
+  /** Probe health is retained even when collection returns useful partial data. */
+  readonly lastProbeFailure?: ProviderFailure;
+  readonly lastCollectionFailure?: ProviderFailure;
   readonly lastError?: ProviderFailure;
+}
+
+export interface CapacityRefreshTarget {
+  listProviderIds(): readonly string[];
+  refresh(providerId: string): Promise<CollectionOutcome>;
 }
 
 export type CapacityEventListener = (event: CapacityEvent) => void;

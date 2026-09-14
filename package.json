@@ -13,6 +13,7 @@
     "dev:agent": "pnpm --filter @sonoran-hub/agent dev",
     "dev:api": "pnpm --filter @sonoran-hub/api dev",
     "dev:web": "pnpm --filter @sonoran-hub/web dev",
+    "db:migrate": "node scripts/migrate-db.mjs",
     "smoke:deepseek": "pnpm --filter @sonoran-hub/contracts build && pnpm --filter @sonoran-hub/config build && pnpm --filter @sonoran-hub/ai-capacity build && node scripts/smoke-deepseek.mjs",
     "smoke:openrouter": "pnpm --filter @sonoran-hub/contracts build && pnpm --filter @sonoran-hub/config build && pnpm --filter @sonoran-hub/ai-capacity build && node scripts/smoke-openrouter.mjs",
     "format": "prettier --write \"**/*.{js,ts,tsx,json,css,yml,yaml}\"",
@@ -32,5 +33,8 @@
     "typescript-eslint": "^8.70.0",
     "vite": "^8.3.0",
     "vitest": "^5.0.0"
+  },
+  "dependencies": {
+    "pg": "^8.23.0"
   }
 }

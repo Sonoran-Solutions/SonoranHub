@@ -46,6 +46,13 @@ Create a boring, testable monorepo and shared contracts before implementing inte
 
 ## Phase 0B — AI Capacity service
 
+### First vertical slice status
+
+The OpenRouter/DeepSeek Capacity slice is implemented through the coordinator,
+PostgreSQL snapshot persistence, Fastify read API, and responsive React
+dashboard. The remaining providers, routing policy, forecasting, and charts
+remain future work.
+
 ### Why this comes early
 
 Capacity is independently useful, comparatively low-risk, and directly feeds later Orchestrator decisions. It also gives the mobile dashboard useful real data before remote execution is ready.

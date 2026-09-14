@@ -13,11 +13,14 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@sonoran-hub/ai-capacity": "workspace:*",
     "@sonoran-hub/config": "workspace:*",
     "@sonoran-hub/contracts": "workspace:*",
-    "fastify": "^5.12.4"
+    "fastify": "^5.12.4",
+    "pg": "^8.23.0"
   },
   "devDependencies": {
+    "@types/pg": "^8.23.1",
     "tsx": "^4.20.6"
   }
 }

@@ -174,21 +174,20 @@ export class DeepSeekCapacityAdapter implements CapacityProviderAdapter {
 
   async collect(): Promise<CapacityCollectionResult> {
     const collectedAt = this.now();
-    if (!this.apiKey) {
-      return {
-        collectedAt,
-        resources: [],
-        error: { code: 'unavailable', message: 'DeepSeek API key is not configured' },
-      };
-    }
-
     let balanceResource: CapacityResource | undefined;
     let balanceFailure: DeepSeekFailure | undefined;
-    try {
-      const response = await this.getBalance();
-      balanceResource = normalizeDeepSeekBalance(response, collectedAt).usdResource;
-    } catch (error) {
-      balanceFailure = this.failureFrom(error);
+    if (!this.apiKey) {
+      balanceFailure = {
+        code: 'unavailable',
+        message: 'DeepSeek API key is not configured',
+      };
+    } else {
+      try {
+        const response = await this.getBalance();
+        balanceResource = normalizeDeepSeekBalance(response, collectedAt).usdResource;
+      } catch (error) {
+        balanceFailure = this.failureFrom(error);
+      }
     }
 
     let pricing: CapacityResource | undefined;

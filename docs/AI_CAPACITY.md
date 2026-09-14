@@ -276,6 +276,20 @@ If a workaround is used, mark its source type and confidence clearly. Do not let
 
 Store snapshots over time so the dashboard can answer more than “right now.”
 
+The first implementation stores immutable normalized observations in
+PostgreSQL using the `capacity_snapshots` table. The Capacity service validates
+and redacts a collection result before saving it through the narrow
+`CapacitySnapshotStore` boundary. A partial result is still a valid snapshot;
+for example, an unknown DeepSeek wallet is stored alongside an available
+pricing window. Raw provider response bodies, Authorization headers, and
+credentials are never stored.
+
+Apply schema changes explicitly with `pnpm db:migrate`; the API does not run
+migrations during normal startup. Snapshots are returned newest first from
+`GET /capacity/history`, with a maximum page size of 100. The current endpoint
+is `GET /capacity` and returns one latest snapshot per registered provider,
+plus safe provider health information.
+
 Recommended fields:
 
 - provider/source ID;
@@ -306,6 +320,10 @@ A collector result has three distinct states:
 - **unknown:** no trustworthy value has ever been collected.
 
 Never map stale or unknown to zero.
+
+The API stamps successful fresh resources with a conservative stale-after
+interval and derives a stale presentation state when that timestamp has
+passed. Historical rows remain immutable observations.
 
 Example:
 

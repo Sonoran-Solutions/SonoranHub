@@ -160,6 +160,7 @@ export const capacitySnapshotSchema = z
     provider: z.string().min(1),
     resources: z.array(capacityResourceSchema),
     collectedAt: capacityTimestampSchema,
+    createdAt: capacityTimestampSchema.optional(),
     freshness: capacityFreshnessSchema,
     error: capacityErrorSchema.optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),
@@ -178,6 +179,56 @@ export const capacitySnapshotSchema = z
   });
 
 export type CapacitySnapshot = z.infer<typeof capacitySnapshotSchema>;
+
+const capacityProbeSchema = z
+  .object({
+    providerId: z.string().min(1),
+    available: z.boolean(),
+    checkedAt: capacityTimestampSchema,
+    reason: z.string().min(1).optional(),
+    error: capacityErrorSchema.optional(),
+  })
+  .strict();
+
+export const capacityProviderHealthSchema = z
+  .object({
+    providerId: z.string().min(1),
+    available: z.boolean().optional(),
+    lastProbe: capacityProbeSchema.optional(),
+    lastCollectionAttempt: capacityTimestampSchema.optional(),
+    lastSuccessfulCollection: capacityTimestampSchema.optional(),
+    lastProbeFailure: capacityErrorSchema.optional(),
+    lastCollectionFailure: capacityErrorSchema.optional(),
+    lastError: capacityErrorSchema.optional(),
+  })
+  .strict();
+
+export type CapacityProviderHealth = z.infer<typeof capacityProviderHealthSchema>;
+
+export const capacityCurrentProviderSchema = z
+  .object({
+    providerId: z.string().min(1),
+    snapshot: capacitySnapshotSchema.nullable(),
+    health: capacityProviderHealthSchema,
+  })
+  .strict();
+
+export const capacityCurrentResponseSchema = z
+  .object({
+    generatedAt: capacityTimestampSchema,
+    providers: z.array(capacityCurrentProviderSchema),
+  })
+  .strict();
+
+export const capacityHistoryResponseSchema = z
+  .object({
+    snapshots: z.array(capacitySnapshotSchema),
+  })
+  .strict();
+
+export type CapacityCurrentProvider = z.infer<typeof capacityCurrentProviderSchema>;
+export type CapacityCurrentResponse = z.infer<typeof capacityCurrentResponseSchema>;
+export type CapacityHistoryResponse = z.infer<typeof capacityHistoryResponseSchema>;
 
 export const capacityCollectionResultSchema = z
   .object({

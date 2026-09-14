@@ -89,7 +89,7 @@ describe('CapacityCoordinator', () => {
     vi.useRealTimers();
   });
 
-  it('probes providers independently and preserves unavailable state', async () => {
+  it('keeps probe health while collecting useful data from an unavailable provider', async () => {
     const available = new FakeAdapter(
       'available',
       async () => availableProbe('available'),
@@ -118,11 +118,23 @@ describe('CapacityCoordinator', () => {
     expect(coordinator.getHealth('unavailable')).toMatchObject({ available: false });
 
     const refresh = await coordinator.refresh('unavailable');
-    expect(refresh).toMatchObject({
-      status: 'failed',
-      error: { code: 'unavailable', message: 'Credentials are not configured' },
+    expect(refresh).toMatchObject({ status: 'succeeded', providerId: 'unavailable' });
+    expect(unavailable.collectCalls).toBe(1);
+    expect(coordinator.getHealth('unavailable')).toMatchObject({
+      available: false,
+      lastProbeFailure: { code: 'unavailable', phase: 'probe' },
+      lastError: { code: 'unavailable', phase: 'probe' },
     });
-    expect(unavailable.collectCalls).toBe(0);
+  });
+
+  it('keeps unknown providers as typed failures', async () => {
+    const coordinator = new CapacityCoordinator(registryWith());
+
+    await expect(coordinator.refresh('not-registered')).resolves.toMatchObject({
+      status: 'failed',
+      providerId: 'not-registered',
+      error: { code: 'unknown' },
+    });
   });
 
   it('times out hanging probes with a typed probe-phase failure and updates health', async () => {
@@ -416,7 +428,7 @@ describe('CapacityRefreshScheduler', () => {
 
     await vi.advanceTimersByTimeAsync(10);
     expect(retrying.probeCalls).toBe(2);
-    expect(retrying.collectCalls).toBe(1);
+    expect(retrying.collectCalls).toBe(2);
     scheduler.stop();
   });
 

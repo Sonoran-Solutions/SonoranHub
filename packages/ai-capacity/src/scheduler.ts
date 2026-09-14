@@ -1,8 +1,10 @@
-import { CapacityCoordinator } from './coordinator.js';
+import type { CapacityRefreshTarget } from './types.js';
 
 export interface RefreshSchedulerOptions {
   readonly defaultIntervalMs?: number;
   readonly intervalsMs?: Readonly<Record<string, number>>;
+  /** The API performs its awaited initial refresh before starting the scheduler. */
+  readonly runImmediately?: boolean;
 }
 
 export class CapacityRefreshScheduler {
@@ -10,14 +12,16 @@ export class CapacityRefreshScheduler {
   private readonly activeRefreshes = new Set<string>();
   private readonly defaultIntervalMs: number;
   private readonly intervalsMs: Readonly<Record<string, number>>;
+  private readonly runImmediately: boolean;
   private running = false;
 
   constructor(
-    private readonly coordinator: CapacityCoordinator,
+    private readonly coordinator: CapacityRefreshTarget,
     options: RefreshSchedulerOptions = {},
   ) {
     this.defaultIntervalMs = options.defaultIntervalMs ?? 60_000;
     this.intervalsMs = options.intervalsMs ?? {};
+    this.runImmediately = options.runImmediately ?? true;
     if (!Number.isFinite(this.defaultIntervalMs) || this.defaultIntervalMs <= 0) {
       throw new Error('defaultIntervalMs must be a finite positive number');
     }
@@ -46,7 +50,9 @@ export class CapacityRefreshScheduler {
           this.trigger(providerId);
         }, intervalMs),
       );
-      this.trigger(providerId);
+      if (this.runImmediately) {
+        this.trigger(providerId);
+      }
     }
   }
 

@@ -54,6 +54,42 @@ describe('DeepSeekCapacityAdapter', () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
+  it('collects public pricing through the coordinator when the API key is missing', async () => {
+    const fetcher = vi.fn<DeepSeekFetch>();
+    const adapter = new DeepSeekCapacityAdapter({
+      fetch: fetcher,
+      now: () => checkedAt,
+    });
+    const registry = new CapacityAdapterRegistry();
+    registry.register(adapter);
+    const coordinator = new CapacityCoordinator(registry, { now: () => checkedAt });
+
+    const result = await coordinator.refresh(DEEPSEEK_PROVIDER_ID);
+
+    expect(result).toMatchObject({ status: 'succeeded', providerId: DEEPSEEK_PROVIDER_ID });
+    if (result.status === 'succeeded') {
+      expect(result.resources).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: 'deepseek-wallet-usd',
+            status: 'unknown',
+            error: { code: 'unavailable', message: 'DeepSeek API key is not configured' },
+          }),
+          expect.objectContaining({
+            id: 'deepseek-pricing-window',
+            status: 'available',
+            freshness: 'fresh',
+          }),
+        ]),
+      );
+    }
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(coordinator.getHealth(DEEPSEEK_PROVIDER_ID)).toMatchObject({
+      available: false,
+      lastProbeFailure: { code: 'unavailable' },
+    });
+  });
+
   it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
     'rejects invalid request timeout: %s',
     (requestTimeoutMs) => {

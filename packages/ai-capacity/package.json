@@ -21,6 +21,10 @@
   "dependencies": {
     "@sonoran-hub/config": "workspace:*",
     "@sonoran-hub/contracts": "workspace:*",
+    "pg": "^8.23.0",
     "zod": "4.5.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1"
   }
 }

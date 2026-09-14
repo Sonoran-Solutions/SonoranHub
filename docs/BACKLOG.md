@@ -141,6 +141,9 @@ Implement adapter registry, probe/collect lifecycle, typed errors, refresh sched
 - One adapter can fail without aborting another.
 - Last known successful values can be returned as stale.
 
+**Status:** Completed for the initial OpenRouter/DeepSeek slice, including the
+generic probe/collection refresh semantics correction.
+
 ## D2 — OpenRouter adapter [P0]
 
 Collect current key/account usage and budget/credit resources available to configured credentials.
@@ -172,9 +175,14 @@ Reference: https://github.com/FAAATQ/DeepSeekBudget
 
 Store normalized snapshot + collection metadata.
 
+**Status:** Completed with the Capacity-specific PostgreSQL store, migration,
+bounded latest/history queries, and integration-test path.
+
 ## D6 — Capacity dashboard [P0]
 
 Show OpenRouter and DeepSeek live data, freshness, collector error state, and next reset/price change.
+
+**Status:** Completed for the first `/capacity` view and compact home summary.
 
 ## D7 — ChatGPT/Codex capacity adapter [P1]
 

@@ -84,20 +84,22 @@ export class CapacityCoordinator {
       }
 
       const probe: ProbeResult = validated;
+      const probeFailure =
+        probe.failure ??
+        (!probe.available
+          ? this.createFailure(
+              'unavailable',
+              adapter.id,
+              'probe',
+              probe.reason ?? 'Provider is unavailable',
+              probe.checkedAt,
+            )
+          : undefined);
       this.updateHealth(adapter.id, {
         available: probe.available,
         lastProbe: probe,
-        lastError:
-          probe.failure ??
-          (!probe.available
-            ? this.createFailure(
-                'unavailable',
-                adapter.id,
-                'probe',
-                probe.reason ?? 'Provider is unavailable',
-                probe.checkedAt,
-              )
-            : undefined),
+        lastProbeFailure: probeFailure,
+        lastError: probeFailure,
       });
       this.emit({ type: 'probe_completed', result: probe });
       return probe;
@@ -141,26 +143,10 @@ export class CapacityCoordinator {
   }
 
   async refresh(providerId: string): Promise<CollectionOutcome> {
-    const probe = await this.probe(providerId);
-    if (probe.available) {
-      return this.collect(providerId);
-    }
-
-    const attemptedAt = this.now();
-    const error =
-      probe.failure ??
-      this.createFailure(
-        'unavailable',
-        providerId,
-        'collect',
-        probe.reason ?? 'Provider is unavailable',
-        attemptedAt,
-      );
-    const result: CollectionFailure = { status: 'failed', providerId, attemptedAt, error };
-    this.updateHealth(providerId, { lastCollectionAttempt: attemptedAt, lastError: error });
-    this.emit({ type: 'collection_started', providerId, startedAt: attemptedAt });
-    this.emit({ type: 'collection_failed', result });
-    return result;
+    // Probe is health information, not a gate. Some adapters expose useful
+    // independently-derived resources even when their authenticated probe fails.
+    await this.probe(providerId);
+    return this.collect(providerId);
   }
 
   async refreshAll(): Promise<readonly CollectionOutcome[]> {
@@ -208,6 +194,30 @@ export class CapacityCoordinator {
         const code: ProviderFailureCode = isProviderFailureCode(parsed.data.error.code)
           ? parsed.data.error.code
           : 'provider_error';
+        if (parsed.data.resources.length > 0) {
+          const partialError = this.createFailure(
+            code,
+            providerId,
+            'collect',
+            parsed.data.error.message,
+            attemptedAt,
+          );
+          const partialResult: CollectionSuccess = {
+            status: 'succeeded',
+            providerId,
+            attemptedAt,
+            collectedAt: parsed.data.collectedAt,
+            resources: parsed.data.resources,
+            error: partialError,
+          };
+          this.updateHealth(providerId, {
+            lastSuccessfulCollection: parsed.data.collectedAt,
+            lastCollectionFailure: partialError,
+            lastError: this.health.get(providerId)?.lastProbeFailure ?? partialError,
+          });
+          this.emit({ type: 'collection_succeeded', result: partialResult });
+          return partialResult;
+        }
         return this.finishFailure(
           providerId,
           attemptedAt,
@@ -239,9 +249,12 @@ export class CapacityCoordinator {
         collectedAt: parsed.data.collectedAt,
         resources: parsed.data.resources,
       };
+      const existingHealth = this.health.get(providerId);
       this.updateHealth(providerId, {
         lastSuccessfulCollection: parsed.data.collectedAt,
-        lastError: undefined,
+        lastCollectionFailure: undefined,
+        // Keep a failed probe visible until a later probe succeeds.
+        lastError: existingHealth?.lastProbeFailure,
       });
       this.emit({ type: 'collection_succeeded', result });
       return result;
@@ -265,7 +278,7 @@ export class CapacityCoordinator {
     error: ProviderFailure,
   ): CollectionFailure {
     const result: CollectionFailure = { status: 'failed', providerId, attemptedAt, error };
-    this.updateHealth(providerId, { lastError: error });
+    this.updateHealth(providerId, { lastCollectionFailure: error, lastError: error });
     this.emit({ type: 'collection_failed', result });
     return result;
   }
@@ -284,7 +297,12 @@ export class CapacityCoordinator {
       reason: message,
       failure,
     };
-    this.updateHealth(providerId, { available: false, lastProbe: result, lastError: failure });
+    this.updateHealth(providerId, {
+      available: false,
+      lastProbe: result,
+      lastProbeFailure: failure,
+      lastError: failure,
+    });
     this.emit({ type: 'probe_completed', result });
     return result;
   }

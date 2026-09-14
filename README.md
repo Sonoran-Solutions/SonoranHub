@@ -97,7 +97,20 @@ pnpm format:check
 pnpm build
 ```
 
-Run the scaffolded applications independently during development:
+For the live Capacity slice, start a local PostgreSQL instance and apply the
+explicit migration before starting the API:
+
+```bash
+cp .env.example .env
+docker compose up -d postgres
+pnpm db:migrate
+```
+
+Copy `.env.example` to `.env` and add provider credentials only to the API
+environment. The browser receives normalized Hub data and never receives
+provider credentials.
+
+Run the applications independently during development:
 
 ```bash
 pnpm dev:web    # Vite development server
@@ -105,8 +118,11 @@ pnpm dev:api    # Fastify API on http://127.0.0.1:3000
 pnpm dev:agent  # startup-only Sonoran Agent process
 ```
 
-The API currently exposes `GET /health`. The web app and packages are intentionally
-scaffolds; product integrations are introduced in later implementation phases.
+The API exposes `GET /health`, `GET /capacity`, and bounded
+`GET /capacity/history?provider=&since=&limit=`. Open
+`http://127.0.0.1:5173/capacity` for the responsive Capacity dashboard. The
+default refresh interval is five minutes and can be changed with
+`CAPACITY_REFRESH_INTERVAL_MS`.
 
 Shared services validate `NODE_ENV`, `LOG_LEVEL`, and `SERVICE_NAME` through
 `@sonoran-hub/config`. Structured logs carry service and optional correlation
