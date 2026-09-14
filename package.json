@@ -13,6 +13,7 @@
     "dev:agent": "pnpm --filter @sonoran-hub/agent dev",
     "dev:api": "pnpm --filter @sonoran-hub/api dev",
     "dev:web": "pnpm --filter @sonoran-hub/web dev",
+    "smoke:deepseek": "pnpm --filter @sonoran-hub/contracts build && pnpm --filter @sonoran-hub/config build && pnpm --filter @sonoran-hub/ai-capacity build && node scripts/smoke-deepseek.mjs",
     "smoke:openrouter": "pnpm --filter @sonoran-hub/contracts build && pnpm --filter @sonoran-hub/config build && pnpm --filter @sonoran-hub/ai-capacity build && node scripts/smoke-openrouter.mjs",
     "format": "prettier --write \"**/*.{js,ts,tsx,json,css,yml,yaml}\"",
     "format:check": "prettier --check \"**/*.{js,ts,tsx,json,css,yml,yaml}\"",

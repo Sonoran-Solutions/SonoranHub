@@ -202,6 +202,38 @@ Keep provider pricing data/config separate from scheduling code. Suggested shape
 
 Pricing configuration should be refreshable without rewriting the dashboard UI.
 
+### Current implementation
+
+The DeepSeek adapter uses the official read-only `GET
+https://api.deepseek.com/user/balance` endpoint with `DEEPSEEK_API_KEY`. The
+balance response is validated before strict decimal-string conversion. USD is
+represented as a `wallet` resource without an invented limit, usage, reset, or
+percentage. CNY is never converted into USD; when present alongside USD it is
+retained in safe metadata, and a CNY-only response leaves the USD wallet
+unknown rather than mislabeling it.
+
+The pricing-window resource is derived independently from versioned UTC
+configuration verified against the official pricing documentation. It reports
+`PEAK` or `OFF_PEAK`, the current multiplier, provenance, and the exact next
+transition timestamp. The schedule uses half-open windows: Monday–Friday
+01:00–04:00 UTC and 06:00–10:00 UTC are peak; all other times are off-peak.
+
+Balance collection and pricing derivation remain independent. A failed balance
+request does not discard a known pricing window, and an invalid pricing
+configuration does not discard a valid wallet. Each balance request has its
+own finite timeout (5 seconds by default) and aborts the underlying fetch;
+the D1 coordinator timeout remains the outer safety boundary.
+
+Normal tests use injected fetch implementations and make no DeepSeek network
+calls. An opt-in live smoke test is available:
+
+```bash
+DEEPSEEK_API_KEY=... pnpm smoke:deepseek
+```
+
+It performs only the balance probe/collection, never an inference request, and
+prints sanitized normalized resources.
+
 ## 6. ChatGPT / Codex
 
 ### Desired resources

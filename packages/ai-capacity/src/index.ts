@@ -13,6 +13,36 @@ export {
 export { CapacityAdapterRegistry } from './registry.js';
 export { CapacityRefreshScheduler, type RefreshSchedulerOptions } from './scheduler.js';
 export {
+  DEEPSEEK_PROVIDER_ID,
+  DeepSeekCapacityAdapter,
+  type DeepSeekCapacityAdapterOptions,
+  type DeepSeekCredentials,
+  type DeepSeekFetch,
+  type DeepSeekResponse,
+} from './providers/deepseek/index.js';
+export {
+  DeepSeekBalanceDataError,
+  deepSeekBalanceResponseSchema,
+  normalizeDeepSeekBalance,
+  parseDeepSeekDecimal,
+  type DeepSeekBalanceFailure,
+  type DeepSeekBalanceNormalization,
+  type DeepSeekBalanceResponse,
+  type NormalizedDeepSeekBalanceInfo,
+} from './providers/deepseek/index.js';
+export {
+  DEEPSEEK_PRICING_SOURCE,
+  compileDeepSeekPricingConfig,
+  deepSeekPricingConfig,
+  evaluateDeepSeekPricingWindow,
+  type CompiledDeepSeekPeakWindow,
+  type CompiledDeepSeekPricingConfig,
+  type DeepSeekPeakWindow,
+  type DeepSeekPriceState,
+  type DeepSeekPricingConfig,
+  type DeepSeekPricingWindowState,
+} from './providers/deepseek/index.js';
+export {
   OPENROUTER_PROVIDER_ID,
   OpenRouterCapacityAdapter,
   type OpenRouterCapacityAdapterOptions,
