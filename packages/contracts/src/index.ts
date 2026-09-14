@@ -6,3 +6,25 @@ export const serviceHealthSchema = z.object({
 });
 
 export type ServiceHealth = z.infer<typeof serviceHealthSchema>;
+
+export {
+  capacityCollectionResultSchema,
+  capacityErrorSchema,
+  capacityFreshnessSchema,
+  capacityKindSchema,
+  capacityResourceSchema,
+  capacitySnapshotSchema,
+  capacitySourceSchema,
+  capacityStatusSchema,
+  capacityTimestampSchema,
+  capacityUnitSchema,
+  type CapacityCollectionResult,
+  type CapacityError,
+  type CapacityFreshness,
+  type CapacityKind,
+  type CapacityResource,
+  type CapacitySnapshot,
+  type CapacitySource,
+  type CapacityStatus,
+  type CapacityUnit,
+} from './capacity.js';

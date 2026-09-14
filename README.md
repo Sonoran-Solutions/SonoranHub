@@ -108,6 +108,11 @@ pnpm dev:agent  # startup-only Sonoran Agent process
 The API currently exposes `GET /health`. The web app and packages are intentionally
 scaffolds; product integrations are introduced in later implementation phases.
 
+Shared services validate `NODE_ENV`, `LOG_LEVEL`, and `SERVICE_NAME` through
+`@sonoran-hub/config`. Structured logs carry service and optional correlation
+identifiers; known credential-shaped metadata is redacted before emission. The API
+also returns an `x-request-id` response header for request correlation.
+
 ## MVP definition
 
 The first genuinely useful milestone is deliberately small:

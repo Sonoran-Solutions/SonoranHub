@@ -17,7 +17,7 @@
     "format:check": "prettier --check \"**/*.{js,ts,tsx,json,css,yml,yaml}\"",
     "lint": "eslint .",
     "test": "pnpm --filter @sonoran-hub/contracts build && vitest run",
-    "typecheck": "pnpm -r --if-present typecheck"
+    "typecheck": "pnpm --filter @sonoran-hub/contracts build && pnpm --filter @sonoran-hub/config build && pnpm -r --if-present typecheck"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

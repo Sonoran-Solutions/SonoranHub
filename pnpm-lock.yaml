@@ -47,6 +47,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@sonoran-hub/config':
+        specifier: workspace:*
+        version: link:../../packages/config
       '@sonoran-hub/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -74,7 +77,11 @@ importers:
         specifier: ^19.2.3
         version: 19.3.0(@types/react@19.3.0)
 
-  packages/ai-capacity: {}
+  packages/ai-capacity:
+    dependencies:
+      '@sonoran-hub/contracts':
+        specifier: workspace:*
+        version: link:../contracts
 
   packages/config:
     dependencies:

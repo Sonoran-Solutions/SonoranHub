@@ -13,6 +13,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@sonoran-hub/config": "workspace:*",
     "@sonoran-hub/contracts": "workspace:*",
     "fastify": "^5.12.4"
   },

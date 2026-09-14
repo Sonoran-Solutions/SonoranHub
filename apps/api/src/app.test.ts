@@ -13,6 +13,7 @@ describe('API health endpoint', () => {
     const response = await app.inject({ method: 'GET', url: '/health' });
 
     expect(response.statusCode).toBe(200);
+    expect(response.headers['x-request-id']).toEqual(expect.any(String));
     expect(response.json()).toEqual({
       status: 'ok',
       service: 'sonoran-hub-api',

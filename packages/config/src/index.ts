@@ -1,7 +1,27 @@
-import { z } from 'zod';
-
-export const baseConfigSchema = z.object({
-  nodeEnv: z.enum(['development', 'test', 'production']).default('development'),
-});
-
-export type BaseConfig = z.infer<typeof baseConfigSchema>;
+export {
+  appConfigSchema,
+  ConfigurationError,
+  loadConfig,
+  logLevelSchema,
+  parseConfig,
+  runtimeEnvironmentSchema,
+  serviceNameSchema,
+  type AppConfig,
+  type EnvironmentInput,
+  type LoadConfigOptions,
+  type LogLevel,
+  type RuntimeEnvironment,
+} from './config.js';
+export {
+  correlationIdSchema,
+  createCorrelationId,
+  createStructuredLogger,
+  parseCorrelationId,
+  redactMetadata,
+  type CorrelationId,
+  type LogContext,
+  type LogSink,
+  type StructuredLogRecord,
+  type StructuredLogger,
+  type StructuredLoggerOptions,
+} from './logging.js';
