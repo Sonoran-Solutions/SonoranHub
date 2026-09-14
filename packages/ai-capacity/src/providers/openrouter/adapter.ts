@@ -7,6 +7,7 @@ import type { AdapterAvailability, CapacityProviderAdapter } from '../../types.j
 
 export const OPENROUTER_PROVIDER_ID = 'openrouter';
 const OPENROUTER_API_BASE_URL = 'https://openrouter.ai/api/v1';
+const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
 
 const nonNegativeMetric = z.number().finite().nonnegative();
 const nullableMetric = nonNegativeMetric.nullable().optional();
@@ -64,6 +65,7 @@ export type OpenRouterFetch = (input: string, init?: RequestInit) => Promise<Ope
 export interface OpenRouterCapacityAdapterOptions extends OpenRouterCredentials {
   readonly fetch?: OpenRouterFetch;
   readonly now?: () => string;
+  readonly requestTimeoutMs?: number;
 }
 
 interface OpenRouterFailure {
@@ -84,6 +86,10 @@ class OpenRouterAdapterError extends Error implements OpenRouterFailure {
 function configuredCredential(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
 }
 
 function roundMetric(value: number): number {
@@ -254,12 +260,17 @@ export class OpenRouterCapacityAdapter implements CapacityProviderAdapter {
   private readonly managementKey: string | undefined;
   private readonly fetcher: OpenRouterFetch;
   private readonly now: () => string;
+  private readonly requestTimeoutMs: number;
 
   constructor(options: OpenRouterCapacityAdapterOptions = {}) {
     this.apiKey = configuredCredential(options.apiKey);
     this.managementKey = configuredCredential(options.managementKey);
     this.fetcher = options.fetch ?? ((input, init) => fetch(input, init));
     this.now = options.now ?? (() => new Date().toISOString());
+    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    if (!Number.isFinite(this.requestTimeoutMs) || this.requestTimeoutMs <= 0) {
+      throw new Error('requestTimeoutMs must be a finite positive number');
+    }
   }
 
   async probe(): Promise<AdapterAvailability> {
@@ -394,33 +405,51 @@ export class OpenRouterCapacityAdapter implements CapacityProviderAdapter {
   }
 
   private async request(path: string, credential: string): Promise<unknown> {
-    let response: OpenRouterResponse;
-    try {
-      response = await this.fetcher(`${OPENROUTER_API_BASE_URL}${path}`, {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
-          Authorization: `Bearer ${credential}`,
-        },
-      });
-    } catch {
-      throw new OpenRouterAdapterError('provider_error', `OpenRouter request failed for ${path}`);
-    }
-
-    if (!response.ok || response.status < 200 || response.status >= 300) {
-      throw new OpenRouterAdapterError(
-        this.failureCodeForStatus(response.status),
-        this.failureMessageForStatus(path, response.status),
-      );
-    }
+    const controller = new AbortController();
+    let didTimeout = false;
+    const timer = setTimeout(() => {
+      didTimeout = true;
+      controller.abort();
+    }, this.requestTimeoutMs);
 
     try {
-      return await response.json();
-    } catch {
-      throw new OpenRouterAdapterError(
-        'invalid_response',
-        `OpenRouter returned invalid JSON for ${path}`,
-      );
+      let response: OpenRouterResponse;
+      try {
+        response = await this.fetcher(`${OPENROUTER_API_BASE_URL}${path}`, {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${credential}`,
+          },
+          signal: controller.signal,
+        });
+      } catch (error) {
+        if (didTimeout || isAbortError(error)) {
+          throw new OpenRouterAdapterError('timeout', `OpenRouter request timed out for ${path}`);
+        }
+        throw new OpenRouterAdapterError('provider_error', `OpenRouter request failed for ${path}`);
+      }
+
+      if (!response.ok || response.status < 200 || response.status >= 300) {
+        throw new OpenRouterAdapterError(
+          this.failureCodeForStatus(response.status),
+          this.failureMessageForStatus(path, response.status),
+        );
+      }
+
+      try {
+        return await response.json();
+      } catch (error) {
+        if (didTimeout || isAbortError(error)) {
+          throw new OpenRouterAdapterError('timeout', `OpenRouter request timed out for ${path}`);
+        }
+        throw new OpenRouterAdapterError(
+          'invalid_response',
+          `OpenRouter returned invalid JSON for ${path}`,
+        );
+      }
+    } finally {
+      clearTimeout(timer);
     }
   }
 

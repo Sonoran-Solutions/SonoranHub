@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { CapacityCoordinator } from '../../coordinator.js';
 import { CapacityAdapterRegistry } from '../../registry.js';
@@ -69,7 +69,66 @@ function routeFetch(
   };
 }
 
+function abortingCreditsFetch(signals: AbortSignal[]): OpenRouterFetch {
+  return async (input, init) => {
+    if (input.endsWith('/key')) {
+      return response(200, keyPayload());
+    }
+
+    const signal = init?.signal;
+    if (!signal) {
+      throw new Error('test fetch did not receive an abort signal');
+    }
+    signals.push(signal);
+    return new Promise<OpenRouterResponse>((_resolve, reject) => {
+      signal.addEventListener(
+        'abort',
+        () => {
+          const error = new Error('aborted request contained no provider details');
+          error.name = 'AbortError';
+          reject(error);
+        },
+        { once: true },
+      );
+    });
+  };
+}
+
+function abortingKeyFetch(signals: AbortSignal[]): OpenRouterFetch {
+  return async (_input, init) => {
+    const signal = init?.signal;
+    if (!signal) {
+      throw new Error('test fetch did not receive an abort signal');
+    }
+    signals.push(signal);
+    return new Promise<OpenRouterResponse>((_resolve, reject) => {
+      signal.addEventListener(
+        'abort',
+        () => {
+          const error = new Error('aborted request contained no provider details');
+          error.name = 'AbortError';
+          reject(error);
+        },
+        { once: true },
+      );
+    });
+  };
+}
+
 describe('OpenRouterCapacityAdapter', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    'rejects invalid request timeout configuration: %s',
+    (requestTimeoutMs) => {
+      expect(() => new OpenRouterCapacityAdapter({ requestTimeoutMs })).toThrow(
+        'requestTimeoutMs must be a finite positive number',
+      );
+    },
+  );
+
   it('reports missing API-key configuration as unavailable without making a request', async () => {
     const fetcher = vi.fn<OpenRouterFetch>();
     const adapter = new OpenRouterCapacityAdapter({ fetch: fetcher, now: () => checkedAt });
@@ -101,6 +160,106 @@ describe('OpenRouterCapacityAdapter', () => {
         authorization: `Bearer ${apiKey}`,
       },
     ]);
+  });
+
+  it('aborts a hanging optional credits request and preserves the fresh key resource', async () => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    const adapter = new OpenRouterCapacityAdapter({
+      apiKey,
+      managementKey,
+      requestTimeoutMs: 25,
+      fetch: abortingCreditsFetch(signals),
+      now: () => checkedAt,
+    });
+    const registry = new CapacityAdapterRegistry();
+    registry.register(adapter);
+    const coordinator = new CapacityCoordinator(registry, {
+      collectionTimeoutMs: 1_000,
+      now: () => checkedAt,
+    });
+
+    const collectionPromise = coordinator.collect(OPENROUTER_PROVIDER_ID);
+    await vi.advanceTimersByTimeAsync(25);
+    const collection = await collectionPromise;
+
+    expect(collection).toMatchObject({ status: 'succeeded' });
+    if (collection.status === 'succeeded') {
+      expect(collection.resources).toHaveLength(2);
+      expect(
+        collection.resources.find((resource) => resource.id === 'openrouter-key-budget'),
+      ).toMatchObject({
+        status: 'available',
+        freshness: 'fresh',
+      });
+      expect(
+        collection.resources.find((resource) => resource.id === 'openrouter-account-credits'),
+      ).toMatchObject({ status: 'unknown', error: { code: 'timeout' } });
+    }
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('maps a hanging key request to a typed probe timeout and aborts the fetch', async () => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    const adapter = new OpenRouterCapacityAdapter({
+      apiKey,
+      requestTimeoutMs: 25,
+      fetch: abortingKeyFetch(signals),
+      now: () => checkedAt,
+    });
+
+    const probePromise = adapter.probe();
+    await vi.advanceTimersByTimeAsync(25);
+    const probe = await probePromise;
+
+    expect(probe).toMatchObject({
+      available: false,
+      failure: {
+        code: 'timeout',
+        phase: 'probe',
+        message: 'OpenRouter request timed out for /key',
+      },
+    });
+    expect(JSON.stringify(probe)).not.toContain(apiKey);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('preserves valid credits when the key request times out', async () => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    const adapter = new OpenRouterCapacityAdapter({
+      apiKey,
+      managementKey,
+      requestTimeoutMs: 25,
+      fetch: async (input, init) => {
+        if (input.endsWith('/credits')) {
+          return response(200, creditsPayload());
+        }
+        return abortingKeyFetch(signals)(input, init);
+      },
+      now: () => checkedAt,
+    });
+
+    const collectionPromise = adapter.collect();
+    await vi.advanceTimersByTimeAsync(25);
+    const collection = await collectionPromise;
+
+    expect(collection.error).toBeUndefined();
+    expect(
+      collection.resources.find((resource) => resource.id === 'openrouter-key-budget'),
+    ).toMatchObject({
+      status: 'unknown',
+      error: { code: 'timeout' },
+    });
+    expect(
+      collection.resources.find((resource) => resource.id === 'openrouter-account-credits'),
+    ).toMatchObject({ kind: 'wallet', remaining: 74.75, freshness: 'fresh' });
+    expect(signals[0]?.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each([
@@ -139,6 +298,41 @@ describe('OpenRouterCapacityAdapter', () => {
       failure: { code: 'invalid_response' },
     });
     expect(JSON.stringify(result)).not.toContain(apiKey);
+  });
+
+  it('keeps immediate transport failures as provider_error and clears the request timer', async () => {
+    vi.useFakeTimers();
+    const adapter = new OpenRouterCapacityAdapter({
+      apiKey,
+      requestTimeoutMs: 25,
+      fetch: async () => {
+        throw new Error(`Authorization: Bearer ${apiKey}`);
+      },
+      now: () => checkedAt,
+    });
+
+    const result = await adapter.collect();
+
+    expect(result).toMatchObject({ error: { code: 'provider_error' } });
+    expect(JSON.stringify(result)).not.toContain(apiKey);
+    expect(JSON.stringify(result)).not.toContain('Authorization');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('keeps malformed JSON responses as invalid_response and clears the request timer', async () => {
+    vi.useFakeTimers();
+    const adapter = new OpenRouterCapacityAdapter({
+      apiKey,
+      requestTimeoutMs: 25,
+      fetch: async () => response(200, { data: { usage: 'malformed', secret: apiKey } }),
+      now: () => checkedAt,
+    });
+
+    const result = await adapter.collect();
+
+    expect(result).toMatchObject({ error: { code: 'invalid_response' } });
+    expect(JSON.stringify(result)).not.toContain(apiKey);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('normalizes a capped key, derives a contract-safe percentage, and preserves reset/BYOK metadata', async () => {

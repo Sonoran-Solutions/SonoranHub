@@ -151,6 +151,11 @@ The management key may be omitted; the smoke test then exercises key-level
 collection only. The command never submits a model completion and prints only
 normalized, non-secret data.
 
+Each OpenRouter HTTP request has its own finite timeout (5 seconds by default)
+and aborts the underlying fetch when that timeout expires. This is independent
+of the D1 coordinator's outer collection timeout, so a timed-out optional
+credits request does not discard a valid key-budget resource.
+
 ## 5. DeepSeek
 
 DeepSeek should expose at least two independent concepts:
