@@ -119,6 +119,38 @@ This month         $6.58
 
 Do not infer a reset date if the provider does not return one.
 
+### Current implementation
+
+The OpenRouter adapter uses only the official `GET /api/v1/key` and
+`GET /api/v1/credits` endpoints. `OPENROUTER_API_KEY` enables the current-key
+probe and the `key_budget` resource. `OPENROUTER_MANAGEMENT_KEY` is a separate,
+optional credential that enables the account-level credit resource; it is never
+substituted with the normal API key.
+
+The key resource uses provider-reported `limit_remaining` when a limit is
+configured. `limit_reset` is retained as metadata and is not converted into an
+invented `resetAt` timestamp. An uncapped key is represented as a freshly
+observed `key_budget` resource with `status: "unknown"` and metadata marking it
+as unbounded; no artificial limit or percentage is created.
+
+If the management-key request fails after the key request succeeds, the key
+resource remains usable and the account-credit resource is marked unknown with
+a safe resource-level error. If no management key is configured, the optional
+account-credit resource is omitted. This preserves the D1 result shape without
+discarding a known-good key budget.
+
+Normal tests inject a fetch-compatible function and make no OpenRouter network
+calls. An opt-in developer smoke test uses the real adapter and read-only
+endpoints:
+
+```bash
+OPENROUTER_API_KEY=... OPENROUTER_MANAGEMENT_KEY=... pnpm smoke:openrouter
+```
+
+The management key may be omitted; the smoke test then exercises key-level
+collection only. The command never submits a model completion and prints only
+normalized, non-secret data.
+
 ## 5. DeepSeek
 
 DeepSeek should expose at least two independent concepts:

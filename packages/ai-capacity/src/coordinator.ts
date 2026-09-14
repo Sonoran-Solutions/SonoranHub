@@ -87,7 +87,17 @@ export class CapacityCoordinator {
       this.updateHealth(adapter.id, {
         available: probe.available,
         lastProbe: probe,
-        ...(probe.available ? { lastError: undefined } : {}),
+        lastError:
+          probe.failure ??
+          (!probe.available
+            ? this.createFailure(
+                'unavailable',
+                adapter.id,
+                'probe',
+                probe.reason ?? 'Provider is unavailable',
+                probe.checkedAt,
+              )
+            : undefined),
       });
       this.emit({ type: 'probe_completed', result: probe });
       return probe;
@@ -288,7 +298,13 @@ export class CapacityCoordinator {
       result.providerId !== adapterId ||
       typeof result.available !== 'boolean' ||
       !capacityTimestampSchema.safeParse(result.checkedAt).success ||
-      (!result.available && !result.reason)
+      (!result.available && !result.reason && !result.failure) ||
+      (result.failure !== undefined &&
+        (result.failure.providerId !== adapterId ||
+          result.failure.phase !== 'probe' ||
+          !isProviderFailureCode(result.failure.code) ||
+          !capacityTimestampSchema.safeParse(result.failure.occurredAt).success ||
+          !result.failure.message))
     ) {
       return undefined;
     }

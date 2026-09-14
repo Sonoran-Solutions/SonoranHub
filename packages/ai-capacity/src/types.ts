@@ -7,6 +7,8 @@ export interface AdapterAvailability {
   readonly available: boolean;
   readonly checkedAt: string;
   readonly reason?: string;
+  /** A provider-specific typed failure when the probe reached the provider. */
+  readonly failure?: ProviderFailure;
 }
 
 export interface CapacityProviderAdapter {
@@ -15,9 +17,7 @@ export interface CapacityProviderAdapter {
   collect(): Promise<CapacityCollectionResult>;
 }
 
-export interface ProbeResult extends AdapterAvailability {
-  readonly failure?: ProviderFailure;
-}
+export type ProbeResult = AdapterAvailability;
 
 export interface CollectionStartedEvent {
   readonly type: 'collection_started';

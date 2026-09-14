@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@sonoran-hub/config": "workspace:*",
-    "@sonoran-hub/contracts": "workspace:*"
+    "@sonoran-hub/contracts": "workspace:*",
+    "zod": "4.5.0"
   }
 }
