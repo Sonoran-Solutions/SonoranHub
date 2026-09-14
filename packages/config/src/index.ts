@@ -20,6 +20,7 @@ export {
   redactMetadata,
   type CorrelationId,
   type LogContext,
+  type LogSeverity,
   type LogSink,
   type StructuredLogRecord,
   type StructuredLogger,

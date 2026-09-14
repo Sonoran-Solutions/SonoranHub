@@ -52,9 +52,31 @@ describe('structured logging', () => {
       sink: (record) => records.push(record),
     });
 
-    logger.info('not emitted');
+    logger.fatal('emitted');
+    logger.error('emitted');
     logger.warn('emitted');
+    logger.info('not emitted');
+    logger.debug('not emitted');
+    logger.trace('not emitted');
 
-    expect(records.map((record) => record.message)).toEqual(['emitted']);
+    expect(records.map((record) => record.message)).toEqual(['emitted', 'emitted', 'emitted']);
+  });
+
+  it('emits no records at all when configured as silent', () => {
+    const records: StructuredLogRecord[] = [];
+    const logger = createStructuredLogger({
+      serviceName: 'sonoran-hub-api',
+      level: 'silent',
+      sink: (record) => records.push(record),
+    });
+
+    logger.fatal('not emitted');
+    logger.error('not emitted');
+    logger.warn('not emitted');
+    logger.info('not emitted');
+    logger.debug('not emitted');
+    logger.trace('not emitted');
+
+    expect(records).toEqual([]);
   });
 });

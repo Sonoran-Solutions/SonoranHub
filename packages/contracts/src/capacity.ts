@@ -164,7 +164,18 @@ export const capacitySnapshotSchema = z
     error: capacityErrorSchema.optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((snapshot, context) => {
+    snapshot.resources.forEach((resource, index) => {
+      if (resource.provider !== snapshot.provider) {
+        context.addIssue({
+          code: 'custom',
+          path: ['resources', index, 'provider'],
+          message: 'resource provider must match snapshot provider',
+        });
+      }
+    });
+  });
 
 export type CapacitySnapshot = z.infer<typeof capacitySnapshotSchema>;
 

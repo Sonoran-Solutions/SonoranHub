@@ -17,7 +17,7 @@ export interface LogContext {
 
 export interface StructuredLogRecord {
   readonly timestamp: string;
-  readonly level: LogLevel;
+  readonly level: LogSeverity;
   readonly service: string;
   readonly message: string;
   readonly correlationId?: CorrelationId;
@@ -26,8 +26,10 @@ export interface StructuredLogRecord {
 
 export type LogSink = (record: StructuredLogRecord) => void;
 
+export type LogSeverity = Exclude<LogLevel, 'silent'>;
+
 export interface StructuredLogger {
-  log(level: LogLevel, message: string, context?: LogContext): void;
+  log(level: LogSeverity, message: string, context?: LogContext): void;
   fatal(message: string, context?: LogContext): void;
   error(message: string, context?: LogContext): void;
   warn(message: string, context?: LogContext): void;
@@ -42,14 +44,13 @@ const sensitiveKeyPattern =
 const sensitiveAssignmentPattern =
   /\b(authorization|cookie|token|api[-_ ]?key|password|secret|credential)\s*[:=]\s*((?:Bearer\s+)?[^\s,;]+)/gi;
 const bearerPattern = /\bBearer\s+[^\s,;]+/gi;
-const levelPriority: Record<LogLevel, number> = {
+const levelPriority: Record<LogSeverity, number> = {
   fatal: 0,
   error: 1,
   warn: 2,
   info: 3,
   debug: 4,
   trace: 5,
-  silent: Number.POSITIVE_INFINITY,
 };
 
 function redactString(value: string): string {
@@ -104,8 +105,8 @@ export function createStructuredLogger(options: StructuredLoggerOptions): Struct
   const sink =
     options.sink ?? ((record: StructuredLogRecord) => console.log(JSON.stringify(record)));
 
-  const log = (recordLevel: LogLevel, message: string, context?: LogContext): void => {
-    if (levelPriority[recordLevel] > levelPriority[level]) {
+  const log = (recordLevel: LogSeverity, message: string, context?: LogContext): void => {
+    if (level === 'silent' || levelPriority[recordLevel] > levelPriority[level]) {
       return;
     }
 

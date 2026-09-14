@@ -220,4 +220,29 @@ describe('capacitySnapshotSchema', () => {
 
     expect(result.success).toBe(true);
   });
+
+  it('rejects resources from a different provider than the snapshot', () => {
+    const result = capacitySnapshotSchema.safeParse({
+      id: 'deepseek-2026-09-14T12:00:00.000Z',
+      provider: 'deepseek',
+      resources: [
+        {
+          id: 'openrouter-credits',
+          provider: 'openrouter',
+          kind: 'credits',
+          name: 'Account credits',
+          remaining: 18.42,
+          unit: 'credits',
+          status: 'available',
+          source: 'official_api',
+          collectedAt,
+          freshness: 'fresh',
+        },
+      ],
+      collectedAt,
+      freshness: 'fresh',
+    });
+
+    expect(result.success).toBe(false);
+  });
 });
