@@ -79,6 +79,9 @@ importers:
 
   packages/ai-capacity:
     dependencies:
+      '@sonoran-hub/config':
+        specifier: workspace:*
+        version: link:../config
       '@sonoran-hub/contracts':
         specifier: workspace:*
         version: link:../contracts
