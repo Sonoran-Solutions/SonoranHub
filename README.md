@@ -102,6 +102,9 @@ explicit migration before starting the API:
 
 ```bash
 cp .env.example .env
+set -a
+source .env
+set +a
 docker compose up -d postgres
 pnpm db:migrate
 ```
