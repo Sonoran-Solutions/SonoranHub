@@ -1,0 +1,180 @@
+:root {
+  color: #e5edf8;
+  background: #0b1220;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: radial-gradient(circle at top right, #192b48 0, #0b1220 42rem);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.app-shell {
+  min-height: 100vh;
+}
+
+.topbar {
+  align-items: center;
+  border-bottom: 1px solid #263652;
+  display: flex;
+  justify-content: space-between;
+  padding: 1.25rem clamp(1rem, 4vw, 3rem);
+}
+
+.eyebrow {
+  color: #7dd3fc;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  margin: 0 0 0.45rem;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  font-size: clamp(1.35rem, 3vw, 1.75rem);
+  margin-bottom: 0;
+}
+
+.status-pill {
+  border: 1px solid #2c5270;
+  border-radius: 999px;
+  color: #bae6fd;
+  font-size: 0.8rem;
+  padding: 0.45rem 0.75rem;
+}
+
+.workspace {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(10rem, 14rem) 1fr;
+  margin: 0 auto;
+  max-width: 88rem;
+  padding: clamp(1rem, 4vw, 3rem);
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.nav-item {
+  border-radius: 0.6rem;
+  color: #9fb0c7;
+  padding: 0.7rem 0.8rem;
+}
+
+.nav-item:hover,
+.nav-item:focus-visible,
+.nav-item.active {
+  background: #17263d;
+  color: #f8fafc;
+  outline: none;
+}
+
+.content {
+  min-width: 0;
+}
+
+.hero {
+  border: 1px solid #2a3d5c;
+  border-radius: 1rem;
+  padding: clamp(1.25rem, 4vw, 2.5rem);
+}
+
+.hero h2 {
+  font-size: clamp(1.7rem, 4vw, 3rem);
+  line-height: 1.08;
+  margin-bottom: 1rem;
+  max-width: 18ch;
+}
+
+.hero p:last-child {
+  color: #b9c7d9;
+  line-height: 1.65;
+  margin-bottom: 0;
+  max-width: 66ch;
+}
+
+.section-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  margin-top: 1rem;
+}
+
+.placeholder-card {
+  background: #111d31;
+  border: 1px solid #263652;
+  border-radius: 0.85rem;
+  min-height: 9rem;
+  padding: 1.1rem;
+}
+
+.card-index {
+  color: #7dd3fc;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.placeholder-card h3 {
+  margin: 1.75rem 0 0.5rem;
+}
+
+.placeholder-card p {
+  color: #9fb0c7;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin-bottom: 0;
+}
+
+@media (max-width: 640px) {
+  .topbar {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .workspace {
+    display: block;
+  }
+
+  .sidebar {
+    flex-direction: row;
+    margin-bottom: 1rem;
+    overflow-x: auto;
+    padding-bottom: 0.25rem;
+  }
+
+  .nav-item {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+}

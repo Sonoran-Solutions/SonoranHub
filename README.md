@@ -84,6 +84,30 @@ This is a target structure, not a requirement to scaffold every package on day o
 - [Security model](docs/SECURITY.md)
 - [Initial backlog](docs/BACKLOG.md)
 
+## Developer setup
+
+The repository is a pnpm workspace and expects Node.js 22 or newer with pnpm 11.
+
+```bash
+pnpm install
+pnpm typecheck
+pnpm test
+pnpm lint
+pnpm format:check
+pnpm build
+```
+
+Run the scaffolded applications independently during development:
+
+```bash
+pnpm dev:web    # Vite development server
+pnpm dev:api    # Fastify API on http://127.0.0.1:3000
+pnpm dev:agent  # startup-only Sonoran Agent process
+```
+
+The API currently exposes `GET /health`. The web app and packages are intentionally
+scaffolds; product integrations are introduced in later implementation phases.
+
 ## MVP definition
 
 The first genuinely useful milestone is deliberately small:
