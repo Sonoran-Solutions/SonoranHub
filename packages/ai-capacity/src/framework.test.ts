@@ -125,6 +125,38 @@ describe('CapacityCoordinator', () => {
     expect(unavailable.collectCalls).toBe(0);
   });
 
+  it('times out hanging probes with a typed probe-phase failure and updates health', async () => {
+    vi.useFakeTimers();
+    const hanging = new FakeAdapter(
+      'hanging-probe',
+      () => new Promise<AdapterAvailability>(() => undefined),
+      async () => successfulCollection('hanging-probe'),
+    );
+    const coordinator = new CapacityCoordinator(registryWith(hanging), { probeTimeoutMs: 25 });
+
+    const probePromise = coordinator.probe('hanging-probe');
+    await vi.advanceTimersByTimeAsync(25);
+    const probe = await probePromise;
+
+    expect(probe).toMatchObject({
+      available: false,
+      failure: { code: 'timeout', phase: 'probe' },
+    });
+    expect(coordinator.getHealth('hanging-probe')).toMatchObject({
+      available: false,
+      lastError: { code: 'timeout', phase: 'probe' },
+    });
+  });
+
+  it('rejects invalid probe timeout configuration clearly', () => {
+    expect(
+      () =>
+        new CapacityCoordinator(registryWith(), {
+          probeTimeoutMs: 0,
+        }),
+    ).toThrow('probeTimeoutMs must be a finite positive number');
+  });
+
   it('collects providers independently and converts failures into typed outcomes', async () => {
     vi.useFakeTimers();
     const throwing = new FakeAdapter(
@@ -266,6 +298,50 @@ describe('CapacityCoordinator', () => {
     await expect(second).resolves.toMatchObject({ status: 'succeeded' });
     expect(events).toEqual(['collection_started', 'collection_succeeded']);
   });
+
+  it('isolates a throwing listener from probe and successful collection outcomes', async () => {
+    const adapter = new FakeAdapter(
+      'listener-success',
+      async () => availableProbe('listener-success'),
+      async () => successfulCollection('listener-success'),
+    );
+    const coordinator = new CapacityCoordinator(registryWith(adapter));
+    const events: string[] = [];
+    coordinator.subscribe(() => {
+      throw new Error('listener failure');
+    });
+    coordinator.subscribe((event) => events.push(event.type));
+
+    await expect(coordinator.probe('listener-success')).resolves.toMatchObject({ available: true });
+    await expect(coordinator.collect('listener-success')).resolves.toMatchObject({
+      status: 'succeeded',
+    });
+    expect(events).toEqual(['probe_completed', 'collection_started', 'collection_succeeded']);
+  });
+
+  it('isolates throwing listeners from failure outcomes and still notifies later listeners', async () => {
+    const adapter = new FakeAdapter(
+      'listener-failure',
+      async () => availableProbe('listener-failure'),
+      async () => {
+        throw new Error('provider failure');
+      },
+    );
+    const coordinator = new CapacityCoordinator(registryWith(adapter));
+    const laterEvents: string[] = [];
+    coordinator.subscribe(() => {
+      throw new Error('listener failure');
+    });
+    coordinator.subscribe((event) => laterEvents.push(event.type));
+
+    const result = await coordinator.collect('listener-failure');
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      error: { code: 'provider_error' },
+    });
+    expect(laterEvents).toEqual(['collection_started', 'collection_failed']);
+  });
 });
 
 describe('CapacityRefreshScheduler', () => {
@@ -306,5 +382,100 @@ describe('CapacityRefreshScheduler', () => {
     expect(scheduler.isRunning).toBe(false);
     expect(first.collectCalls).toBe(2);
     expect(second.collectCalls).toBe(1);
+  });
+
+  it('retries a provider after a probe timeout settles', async () => {
+    vi.useFakeTimers();
+    let firstProbe = true;
+    const retrying = new FakeAdapter(
+      'retrying',
+      () => {
+        if (firstProbe) {
+          firstProbe = false;
+          return new Promise<AdapterAvailability>(() => undefined);
+        }
+        return Promise.resolve(availableProbe('retrying'));
+      },
+      async () => successfulCollection('retrying'),
+    );
+    const coordinator = new CapacityCoordinator(registryWith(retrying), {
+      probeTimeoutMs: 10,
+    });
+    const scheduler = new CapacityRefreshScheduler(coordinator, {
+      intervalsMs: { retrying: 20 },
+    });
+
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(retrying.probeCalls).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(10);
+    expect(coordinator.getHealth('retrying')).toMatchObject({
+      lastError: { code: 'timeout', phase: 'probe' },
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+    expect(retrying.probeCalls).toBe(2);
+    expect(retrying.collectCalls).toBe(1);
+    scheduler.stop();
+  });
+
+  it('does not overlap scheduled refreshes for the same provider', async () => {
+    vi.useFakeTimers();
+    let resolveCollection: ((result: CapacityCollectionResult) => void) | undefined;
+    const slow = new FakeAdapter(
+      'same-provider',
+      async () => availableProbe('same-provider'),
+      () =>
+        new Promise<CapacityCollectionResult>((resolve) => {
+          resolveCollection = resolve;
+        }),
+    );
+    const coordinator = new CapacityCoordinator(registryWith(slow), {
+      collectionTimeoutMs: 1_000,
+    });
+    const scheduler = new CapacityRefreshScheduler(coordinator, {
+      intervalsMs: { 'same-provider': 5 },
+    });
+
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(slow.collectCalls).toBe(1);
+
+    resolveCollection?.(successfulCollection('same-provider'));
+    await vi.advanceTimersByTimeAsync(0);
+    scheduler.stop();
+  });
+
+  it('keeps another provider scheduled while one provider is slow', async () => {
+    vi.useFakeTimers();
+    let resolveSlowProbe: ((result: AdapterAvailability) => void) | undefined;
+    const slow = new FakeAdapter(
+      'slow-provider',
+      () =>
+        new Promise<AdapterAvailability>((resolve) => {
+          resolveSlowProbe = resolve;
+        }),
+      async () => successfulCollection('slow-provider'),
+    );
+    const fast = new FakeAdapter(
+      'fast-provider',
+      async () => availableProbe('fast-provider'),
+      async () => successfulCollection('fast-provider'),
+    );
+    const coordinator = new CapacityCoordinator(registryWith(slow, fast));
+    const scheduler = new CapacityRefreshScheduler(coordinator, {
+      intervalsMs: { 'slow-provider': 10, 'fast-provider': 5 },
+    });
+
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(15);
+    expect(slow.probeCalls).toBe(1);
+    expect(fast.collectCalls).toBeGreaterThan(1);
+
+    resolveSlowProbe?.(availableProbe('slow-provider'));
+    await vi.advanceTimersByTimeAsync(0);
+    scheduler.stop();
   });
 });

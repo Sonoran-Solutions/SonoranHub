@@ -18,16 +18,18 @@ const DEFAULT_COLLECTION_TIMEOUT_MS = 10_000;
 
 export interface CapacityCoordinatorOptions {
   readonly collectionTimeoutMs?: number;
+  readonly probeTimeoutMs?: number;
   readonly now?: () => string;
 }
 
-class CollectionTimeoutError extends Error {}
+class OperationTimeoutError extends Error {}
 
 export class CapacityCoordinator {
   private readonly activeCollections = new Map<string, Promise<CollectionOutcome>>();
   private readonly health = new Map<string, ProviderHealth>();
   private readonly listeners = new Set<CapacityEventListener>();
   private readonly collectionTimeoutMs: number;
+  private readonly probeTimeoutMs: number;
   private readonly now: () => string;
 
   constructor(
@@ -35,9 +37,9 @@ export class CapacityCoordinator {
     options: CapacityCoordinatorOptions = {},
   ) {
     this.collectionTimeoutMs = options.collectionTimeoutMs ?? DEFAULT_COLLECTION_TIMEOUT_MS;
-    if (!Number.isFinite(this.collectionTimeoutMs) || this.collectionTimeoutMs <= 0) {
-      throw new Error('collectionTimeoutMs must be a finite positive number');
-    }
+    this.validateTimeout('collectionTimeoutMs', this.collectionTimeoutMs);
+    this.probeTimeoutMs = options.probeTimeoutMs ?? this.collectionTimeoutMs;
+    this.validateTimeout('probeTimeoutMs', this.probeTimeoutMs);
     this.now = options.now ?? (() => new Date().toISOString());
   }
 
@@ -71,7 +73,7 @@ export class CapacityCoordinator {
     }
 
     try {
-      const result = await adapter.probe();
+      const result = await this.withTimeout(adapter.probe(), this.probeTimeoutMs);
       const validated = this.validateProbeResult(adapter.id, result);
       if (!validated) {
         return this.recordProbeFailure(
@@ -89,7 +91,14 @@ export class CapacityCoordinator {
       });
       this.emit({ type: 'probe_completed', result: probe });
       return probe;
-    } catch {
+    } catch (error) {
+      if (error instanceof OperationTimeoutError) {
+        return this.recordProbeFailure(
+          adapter.id,
+          'timeout',
+          `Provider probe exceeded ${this.probeTimeoutMs}ms timeout`,
+        );
+      }
       return this.recordProbeFailure(
         adapter.id,
         'provider_error',
@@ -227,7 +236,7 @@ export class CapacityCoordinator {
       this.emit({ type: 'collection_succeeded', result });
       return result;
     } catch (error) {
-      const code = error instanceof CollectionTimeoutError ? 'timeout' : 'provider_error';
+      const code = error instanceof OperationTimeoutError ? 'timeout' : 'provider_error';
       const message =
         code === 'timeout'
           ? `Provider collection exceeded ${this.collectionTimeoutMs}ms timeout`
@@ -312,14 +321,24 @@ export class CapacityCoordinator {
 
   private emit(event: CapacityEvent): void {
     for (const listener of this.listeners) {
-      listener(event);
+      try {
+        listener(event);
+      } catch {
+        // Lifecycle observers are isolated from provider operations and each other.
+      }
+    }
+  }
+
+  private validateTimeout(name: string, value: number): void {
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new Error(`${name} must be a finite positive number`);
     }
   }
 
   private async withTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new CollectionTimeoutError()), timeoutMs);
+      timer = setTimeout(() => reject(new OperationTimeoutError()), timeoutMs);
     });
 
     try {
