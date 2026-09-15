@@ -1,5 +1,6 @@
 import { buildApp } from './app.js';
 import { createCapacityRuntime } from './capacity.js';
+import { parseAllowedOrigins } from './cors.js';
 import { createStructuredLogger, loadConfig } from '@sonoran-hub/config';
 
 const port = Number(process.env.PORT ?? 3000);
@@ -7,7 +8,10 @@ const host = process.env.HOST ?? '127.0.0.1';
 const config = loadConfig(process.env, { defaultServiceName: 'sonoran-hub-api' });
 const logger = createStructuredLogger({ serviceName: config.serviceName, level: config.logLevel });
 const capacity = createCapacityRuntime({ environment: process.env, config, logger });
-const app = buildApp(config, { capacityService: capacity.service });
+const app = buildApp(config, {
+  capacityService: capacity.service,
+  allowedOrigins: parseAllowedOrigins(process.env.WEB_ORIGIN),
+});
 
 app.addHook('onClose', async () => {
   await capacity.stop();

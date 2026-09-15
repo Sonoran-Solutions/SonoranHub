@@ -125,7 +125,9 @@ The API exposes `GET /health`, `GET /capacity`, and bounded
 `GET /capacity/history?provider=&since=&limit=`. Open
 `http://127.0.0.1:5173/capacity` for the responsive Capacity dashboard. The
 default refresh interval is five minutes and can be changed with
-`CAPACITY_REFRESH_INTERVAL_MS`.
+`CAPACITY_REFRESH_INTERVAL_MS`. The API allows browser requests from the
+comma-separated origins in `WEB_ORIGIN`; by default this includes both
+`http://127.0.0.1:5173` and `http://localhost:5173`.
 
 Shared services validate `NODE_ENV`, `LOG_LEVEL`, and `SERVICE_NAME` through
 `@sonoran-hub/config`. Structured logs carry service and optional correlation

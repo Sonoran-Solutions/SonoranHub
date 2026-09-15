@@ -62,6 +62,47 @@ describe('API health endpoint', () => {
   });
 });
 
+describe('API CORS', () => {
+  it('allows a configured origin and omits the header for arbitrary origins', async () => {
+    const app = buildApp(testConfig, { allowedOrigins: ['https://trusted.example'] });
+
+    const allowed = await app.inject({
+      method: 'GET',
+      url: '/health',
+      headers: { origin: 'https://trusted.example' },
+    });
+    const arbitrary = await app.inject({
+      method: 'GET',
+      url: '/health',
+      headers: { origin: 'https://arbitrary.example' },
+    });
+    await app.close();
+
+    expect(allowed.headers['access-control-allow-origin']).toBe('https://trusted.example');
+    expect(allowed.headers.vary).toBe('Origin');
+    expect(arbitrary.headers['access-control-allow-origin']).toBeUndefined();
+  });
+
+  it('allows the documented local development origins by default', async () => {
+    const app = buildApp(testConfig);
+
+    const loopback = await app.inject({
+      method: 'GET',
+      url: '/health',
+      headers: { origin: 'http://127.0.0.1:5173' },
+    });
+    const localhost = await app.inject({
+      method: 'GET',
+      url: '/health',
+      headers: { origin: 'http://localhost:5173' },
+    });
+    await app.close();
+
+    expect(loopback.headers['access-control-allow-origin']).toBe('http://127.0.0.1:5173');
+    expect(localhost.headers['access-control-allow-origin']).toBe('http://localhost:5173');
+  });
+});
+
 const testConfig = loadConfig(
   { NODE_ENV: 'test', LOG_LEVEL: 'silent', SERVICE_NAME: 'sonoran-hub-api' },
   { defaultServiceName: 'sonoran-hub-api' },

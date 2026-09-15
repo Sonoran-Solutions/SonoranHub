@@ -42,6 +42,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify clean checkout has no generated package output
+        run: |
+          if find apps packages -mindepth 2 -maxdepth 2 -type d -name dist -print -quit | grep -q .; then
+            echo "Generated workspace dist output must not be required by validation"
+            exit 1
+          fi
+
       - name: Run database migrations
         run: pnpm db:migrate
 

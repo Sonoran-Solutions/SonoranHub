@@ -21,8 +21,11 @@ import {
   CapacityService,
 } from '@sonoran-hub/ai-capacity';
 
+import { DEFAULT_WEB_ORIGINS } from './cors.js';
+
 export interface BuildAppOptions {
   readonly capacityService?: CapacityService;
+  readonly allowedOrigins?: readonly string[];
 }
 
 export function buildApp(
@@ -40,10 +43,17 @@ export function buildApp(
       return parseCorrelationId(requestId) ?? createCorrelationId();
     },
   });
+  const allowedOrigins = new Set(options.allowedOrigins ?? DEFAULT_WEB_ORIGINS);
 
   app.addHook('onRequest', (request, reply, done) => {
     reply.header('x-request-id', request.id);
-    reply.header('access-control-allow-origin', '*');
+    const origin = request.headers.origin;
+    if (origin !== undefined) {
+      reply.header('vary', 'Origin');
+      if (allowedOrigins.has(origin)) {
+        reply.header('access-control-allow-origin', origin);
+      }
+    }
     done();
   });
 
