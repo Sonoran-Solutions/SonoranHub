@@ -126,7 +126,12 @@ The API exposes `GET /health`, `GET /capacity`, and bounded
 `http://127.0.0.1:5173/capacity` for the responsive Capacity dashboard. The
 provider refresh default is every 60 seconds and can be changed with
 `CAPACITY_REFRESH_INTERVAL_MS`. The browser polls the Hub API every 15 seconds
-for persisted snapshots; it never calls DeepSeek or OpenRouter directly. The
+for persisted snapshots; it never calls Codex, DeepSeek, or OpenRouter directly.
+Codex capacity comes from the server-side official local `codex app-server`; an
+already-authenticated CLI is required and `CODEX_BIN` can override its path.
+Hub stores only normalized capacity data and safe metadata, never copied
+ChatGPT/Codex credentials. Run the opt-in read-only smoke test with
+`pnpm smoke:codex`. The
 API allows browser requests from the
 comma-separated origins in `WEB_ORIGIN`; by default this includes both
 `http://127.0.0.1:5173` and `http://localhost:5173`.
@@ -143,7 +148,7 @@ The first genuinely useful milestone is deliberately small:
 1. Hub loads on desktop and mobile.
 2. Main PC connects through Sonoran Agent and reports online state plus basic telemetry.
 3. Hub lists configured Sonoran Solutions projects and their GitHub state.
-4. AI Capacity shows real data from at least OpenRouter and DeepSeek, with ChatGPT/Codex and Gemini adapters following behind the same interface.
+4. AI Capacity shows real data from OpenRouter, DeepSeek, and the locally authenticated Codex app-server, with Gemini following behind the same interface.
 5. A user can create a development task, select a project and execution profile, and dispatch it to the main PC.
 6. The agent creates an isolated worktree, runs an approved worker command, streams status/events, and reports completion/failure.
 7. Hub shows the resulting branch, test result, summary, and pull-request link when available.

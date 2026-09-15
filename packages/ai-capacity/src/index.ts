@@ -64,6 +64,57 @@ export {
   type OpenRouterKeyResponse,
   type OpenRouterResponse,
 } from './providers/openrouter/index.js';
+export {
+  CODEX_PROVIDER_ID,
+  CodexCapacityAdapter,
+  type CodexCapacityAdapterOptions,
+} from './providers/codex/index.js';
+export {
+  CODEX_PROTOCOL_SOURCE,
+  CodexAppServerSource,
+  type CodexAppServerSourceOptions,
+  type CodexCapacitySource,
+  type CodexRateLimitSnapshot,
+  type CodexSourceAvailability,
+} from './providers/codex/index.js';
+export {
+  CODEX_SOURCE,
+  CODEX_WEEKLY_WINDOW_MINUTES,
+  CodexNormalizationError,
+  codexQuotaStatus,
+  codexUnixSecondsToIso,
+  formatCodexQuotaWindowLabel,
+  normalizeCodexRateLimits,
+  sanitizeCodexLimitId,
+} from './providers/codex/index.js';
+export {
+  CodexAppServerClient,
+  CodexAppServerClientError,
+  spawnCodexProcess,
+  type CodexAppServerClientOptions,
+  type CodexChildProcess,
+  type CodexClientErrorCode,
+  type CodexSpawn,
+} from './providers/codex/index.js';
+export {
+  codexAccountResponseSchema,
+  codexCreditsSnapshotSchema,
+  codexInitializeResponseSchema,
+  codexPlanTypeSchema,
+  codexRateLimitReachedTypeSchema,
+  codexRateLimitResetCreditsSchema,
+  codexRateLimitSnapshotSchema,
+  codexRateLimitWindowSchema,
+  codexRateLimitsResponseSchema,
+  codexSpendControlLimitSnapshotSchema,
+  type CodexAccount,
+  type CodexAccountResponse,
+  type CodexInitializeResponse,
+  type CodexPlanType,
+  type CodexRateLimitSnapshot as CodexProtocolRateLimitSnapshot,
+  type CodexRateLimitWindow,
+  type CodexRateLimitsResponse,
+} from './providers/codex/index.js';
 export type {
   AdapterAvailability,
   CapacityRefreshTarget,

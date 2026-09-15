@@ -271,6 +271,16 @@ Avoid persisting reusable auth tokens when the collector can operate Agent-side 
 
 If raw provider payloads are retained for debugging, apply secret redaction before storage.
 
+For Codex capacity, Hub starts only the configured executable directly as
+`codex app-server` with stdio pipes; it does not use `shell: true`. Codex owns
+authentication and token refresh. Hub sends one initialization handshake and
+read-only account/rate-limit requests, and receives normalized capacity data.
+OAuth/access/refresh tokens, auth files, account email/IDs, and raw JSON-RPC
+responses are not persisted or exposed to the browser. Stdout is treated as
+protocol traffic and stderr is diagnostic text that is bounded and redacted
+before optional logging. No Codex login, turn, thread, or reset-credit
+redemption endpoint is exposed by Capacity.
+
 ## 13. Audit log
 
 Audit events should cover at least:

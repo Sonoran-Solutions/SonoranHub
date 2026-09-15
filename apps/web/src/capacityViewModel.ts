@@ -137,7 +137,9 @@ export function providerLabel(providerId: string): string {
     ? 'OpenRouter'
     : providerId === 'deepseek'
       ? 'DeepSeek'
-      : providerId;
+      : providerId === 'codex'
+        ? 'Codex'
+        : providerId;
 }
 
 export function formatMoney(value: number | undefined): string {
@@ -155,6 +157,29 @@ export function formatTimestamp(value: string | undefined): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(
     new Date(value),
   );
+}
+
+export function formatRelativeReset(value: string | undefined, now = Date.now()): string {
+  if (!value) {
+    return 'at an unknown time';
+  }
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) {
+    return 'at an unknown time';
+  }
+  const seconds = Math.max(0, Math.floor((timestamp - now) / 1_000));
+  if (seconds < 60) {
+    return seconds === 0 ? 'now' : 'in under 1m';
+  }
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours % 24 > 0) parts.push(`${hours % 24}h`);
+  if (minutes % 60 > 0 && parts.length < 2) parts.push(`${minutes % 60}m`);
+  if (parts.length === 0) parts.push('under 1m');
+  return `in ${parts.join(' ')}`;
 }
 
 export function formatRelativeAge(value: string | undefined, now = Date.now()): string {
@@ -246,7 +271,12 @@ export function providerSummaryStatus(
   if (unavailable) {
     return 'unavailable';
   }
-  return resources.some((resource) => !isSemanticallyKnownResource(resource))
+  return resources.some(
+    (resource) =>
+      !isSemanticallyKnownResource(resource) ||
+      resource.status === 'critical' ||
+      resource.status === 'exhausted',
+  )
     ? 'partial'
     : 'available';
 }
@@ -259,6 +289,37 @@ export function primaryResource(
   resources: readonly CapacityResource[],
 ): CapacityResource | undefined {
   return resources.find((resource) => resource.kind === 'wallet') ?? resources[0];
+}
+
+export function codexMainQuotaResources(
+  resources: readonly CapacityResource[],
+): readonly CapacityResource[] {
+  return resources
+    .filter(
+      (resource) =>
+        resource.provider === 'codex' &&
+        (resource.kind === 'rolling_quota' || resource.kind === 'weekly_quota') &&
+        resource.metadata?.limit_id === 'codex' &&
+        (resource.metadata.window_role === 'primary' ||
+          resource.metadata.window_role === 'secondary'),
+    )
+    .sort((left, right) =>
+      left.metadata?.window_role === right.metadata?.window_role
+        ? left.id.localeCompare(right.id)
+        : left.metadata?.window_role === 'primary'
+          ? -1
+          : 1,
+    );
+}
+
+export function codexPlanLabel(resources: readonly CapacityResource[]): string | undefined {
+  const plan = resources.find(
+    (resource) => resource.provider === 'codex' && typeof resource.metadata?.plan_type === 'string',
+  )?.metadata?.plan_type;
+  if (typeof plan !== 'string' || plan === 'unknown') {
+    return undefined;
+  }
+  return plan.replaceAll('_', ' ').toUpperCase();
 }
 
 export function resourceValue(resource: CapacityResource): string {
@@ -280,7 +341,7 @@ export function resourceValue(resource: CapacityResource): string {
   return 'Not reported';
 }
 
-export function resourceDetail(resource: CapacityResource): string | undefined {
+export function resourceDetail(resource: CapacityResource, now = Date.now()): string | undefined {
   if (resource.kind === 'pricing_window') {
     return pricingTransitionLabel(resource);
   }
@@ -295,7 +356,7 @@ export function resourceDetail(resource: CapacityResource): string | undefined {
     return parts.join(' · ') || undefined;
   }
   if (resource.resetAt) {
-    return `Resets ${formatTimestamp(resource.resetAt)}`;
+    return `Resets ${formatRelativeReset(resource.resetAt, now)} · ${formatTimestamp(resource.resetAt)}`;
   }
   if (resource.changesAt) {
     return `Changes ${formatTimestamp(resource.changesAt)}`;

@@ -189,6 +189,7 @@ h1 {
 }
 .state-badge,
 .pricing-badge,
+.plan-badge,
 .status-text,
 .freshness-text {
   border-radius: 999px;
@@ -215,6 +216,10 @@ h1 {
 .pricing-normal {
   background: #193755;
   color: #bae6fd;
+}
+.plan-badge {
+  background: #25304a;
+  color: #c4b5fd;
 }
 .badge-unknown,
 .status-unknown,
@@ -290,6 +295,28 @@ h1 {
 }
 .compact-summary strong {
   font-size: 1.2rem;
+}
+.compact-quota-list {
+  display: grid;
+  gap: 0.65rem;
+}
+.compact-quota {
+  align-items: baseline;
+  display: grid;
+  gap: 0.15rem 0.75rem;
+  grid-template-columns: 1fr auto;
+}
+.compact-quota span {
+  color: #cbd5e1;
+  font-weight: 700;
+}
+.compact-quota strong {
+  color: #f8fafc;
+}
+.compact-quota small {
+  color: #9fb0c7;
+  font-size: 0.78rem;
+  grid-column: 1 / -1;
 }
 .refresh-status {
   color: #9fb0c7;

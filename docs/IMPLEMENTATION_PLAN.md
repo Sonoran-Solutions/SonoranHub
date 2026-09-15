@@ -50,8 +50,9 @@ Create a boring, testable monorepo and shared contracts before implementing inte
 
 The OpenRouter/DeepSeek Capacity slice is implemented through the coordinator,
 PostgreSQL snapshot persistence, Fastify read API, and responsive React
-dashboard. The remaining providers, routing policy, forecasting, and charts
-remain future work.
+dashboard. Codex capacity is now implemented through the official local
+app-server source boundary and the same persistence/API/UI path. Gemini,
+routing policy, forecasting, charts, and Sonoran Agent remain future work.
 
 ### Why this comes early
 
@@ -95,10 +96,10 @@ Reference: https://github.com/FAAATQ/DeepSeekBudget
 
 #### Provider 3: ChatGPT/Codex
 
-- Prefer the locally authenticated official Codex app-server boundary rather than copying browser cookies/tokens into Hub.
-- Implement an Agent-side collector capable of requesting structured account rate-limit state.
-- Normalize primary/secondary quota windows, reset times, and available reset-credit information when exposed.
-- Version-pin/document the Codex integration because the app-server protocol can evolve.
+- [x] Prefer the locally authenticated official Codex app-server boundary rather than copying browser cookies/tokens into Hub.
+- [x] Implement a reusable Hub-local source capable of requesting structured account and rate-limit state; keep the source contract ready for a later Agent transport.
+- [x] Normalize primary/secondary quota windows, reset times, additional buckets, spend control, credits, and available reset-credit information when exposed.
+- [x] Version/document the Codex integration because the app-server protocol can evolve.
 
 #### Provider 4: Gemini
 

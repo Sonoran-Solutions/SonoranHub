@@ -4,18 +4,23 @@ import type { CapacityCurrentResponse, CapacityResource } from '@sonoran-hub/con
 
 import {
   createCapacityPoller,
+  codexMainQuotaResources,
+  codexPlanLabel,
   deepSeekPricingPresentation,
   DEFAULT_UI_POLL_INTERVAL_MS,
   formatRelativeAge,
+  formatRelativeReset,
   freshnessLabel,
   isSemanticallyKnownResource,
   pricingTransitionLabel,
   primaryResource,
   providerSummaryStatus,
   resourceStatusLabel,
+  resourceDetail,
   resourceValue,
   type CapacityState,
   statusLabel,
+  providerLabel,
 } from './capacityViewModel.js';
 
 const base: CapacityResource = {
@@ -135,6 +140,65 @@ describe('capacity presentation helpers', () => {
   it('uses text labels for status and freshness', () => {
     expect(statusLabel('critical')).toBe('critical');
     expect(freshnessLabel('stale')).toBe('stale');
+  });
+
+  it('labels Codex and prioritizes its main quota windows for compact presentation', () => {
+    const mainPrimary: CapacityResource = {
+      ...base,
+      id: 'codex-codex-primary',
+      provider: 'codex',
+      kind: 'rolling_quota',
+      name: '5-hour quota',
+      unit: 'percent',
+      remaining: 63,
+      remainingPercent: 63,
+      metadata: { limit_id: 'codex', window_role: 'primary', plan_type: 'plus' },
+    };
+    const mainSecondary: CapacityResource = {
+      ...mainPrimary,
+      id: 'codex-codex-secondary',
+      kind: 'weekly_quota',
+      name: 'Weekly quota',
+      remaining: 81,
+      remainingPercent: 81,
+      metadata: { limit_id: 'codex', window_role: 'secondary', plan_type: 'plus' },
+    };
+    const additional: CapacityResource = {
+      ...mainPrimary,
+      id: 'codex-reserve-primary',
+      name: 'Reserve · 1-hour quota',
+      metadata: { limit_id: 'reserve', window_role: 'primary', plan_type: 'plus' },
+    };
+    expect(providerLabel('codex')).toBe('Codex');
+    expect(codexMainQuotaResources([additional, mainSecondary, mainPrimary])).toEqual([
+      mainPrimary,
+      mainSecondary,
+    ]);
+    expect(codexPlanLabel([mainPrimary])).toBe('PLUS');
+    expect(providerSummaryStatus([{ ...mainPrimary, status: 'critical' }], false)).toBe('partial');
+    expect(resourceStatusLabel({ ...mainPrimary, status: 'exhausted' })).toBe('exhausted');
+    expect(resourceStatusLabel({ ...mainPrimary, status: 'available', freshness: 'stale' })).toBe(
+      'available',
+    );
+  });
+
+  it('formats Codex reset countdowns and keeps the exact timestamp in detail', () => {
+    const now = Date.parse('2026-09-14T12:00:00.000Z');
+    expect(formatRelativeReset('2026-09-14T14:14:00.000Z', now)).toBe('in 2h 14m');
+    expect(
+      resourceDetail(
+        {
+          ...base,
+          provider: 'codex',
+          kind: 'rolling_quota',
+          unit: 'percent',
+          remaining: 63,
+          remainingPercent: 63,
+          resetAt: '2026-09-14T14:14:00.000Z',
+        },
+        now,
+      ),
+    ).toMatch(/^Resets in 2h 14m · /);
   });
 });
 

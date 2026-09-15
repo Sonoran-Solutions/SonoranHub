@@ -5,10 +5,12 @@ import {
   CapacityCoordinator,
   CapacityRefreshScheduler,
   CapacityService,
+  CodexCapacityAdapter,
   DeepSeekCapacityAdapter,
   InMemoryCapacitySnapshotStore,
   OpenRouterCapacityAdapter,
   PostgresCapacitySnapshotStore,
+  type CodexCapacitySource,
   type CapacitySnapshotStore,
 } from '@sonoran-hub/ai-capacity';
 import { createStructuredLogger, type AppConfig, type StructuredLogger } from '@sonoran-hub/config';
@@ -20,6 +22,7 @@ export interface CapacityRuntimeEnvironment {
   readonly OPENROUTER_API_KEY?: string;
   readonly OPENROUTER_MANAGEMENT_KEY?: string;
   readonly DEEPSEEK_API_KEY?: string;
+  readonly CODEX_BIN?: string;
   readonly CAPACITY_REFRESH_INTERVAL_MS?: string;
 }
 
@@ -28,6 +31,7 @@ export interface CapacityRuntimeOptions {
   readonly config: AppConfig;
   readonly logger?: StructuredLogger;
   readonly store?: CapacitySnapshotStore;
+  readonly codexSource?: CodexCapacitySource;
 }
 
 export interface CapacityRuntime {
@@ -54,6 +58,14 @@ export function createCapacityRuntime(options: CapacityRuntimeOptions): Capacity
     }),
   );
   registry.register(new DeepSeekCapacityAdapter({ apiKey: options.environment.DEEPSEEK_API_KEY }));
+  const codex = new CodexCapacityAdapter({
+    source: options.codexSource,
+    sourceOptions: {
+      executable: options.environment.CODEX_BIN || 'codex',
+      onDiagnostic: (message) => logger.debug('capacity.codex.stderr', { metadata: { message } }),
+    },
+  });
+  registry.register(codex);
 
   let pool: Pool | undefined;
   let store = options.store;
@@ -95,6 +107,7 @@ export function createCapacityRuntime(options: CapacityRuntimeOptions): Capacity
     },
     async stop() {
       scheduler.stop();
+      await codex.close();
       await pool?.end();
     },
   };

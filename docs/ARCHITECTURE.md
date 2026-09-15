@@ -78,7 +78,7 @@ The provider adapters and GitHub integration are boundaries, not places for prod
 The first end-to-end Capacity path is:
 
 ```text
-OpenRouter / DeepSeek adapters
+OpenRouter / DeepSeek / Codex adapters
   -> CapacityCoordinator and D1 scheduler
   -> CapacityService
   -> CapacitySnapshotStore -> PostgreSQL
@@ -91,6 +91,25 @@ probe is not a generic collection gate because an adapter may still produce
 useful partial or derived resources. In particular, DeepSeek pricing is
 derived from verified UTC configuration even when its authenticated wallet
 request is unavailable.
+
+Codex is intentionally split into a protocol/source layer and a normalized
+adapter layer:
+
+```text
+Hub API Capacity runtime
+  -> CodexCapacityAdapter
+  -> CodexCapacitySource
+  -> official local `codex app-server` over stdio
+```
+
+The source owns the JSONL process, request correlation, initialization
+handshake, timeouts, notification handling, and cleanup. It reads only
+official structured `account/read` and `account/rateLimits/read` data. Today it
+runs locally in Hub API; a future Sonoran Agent can supply the same source
+contract without changing normalized provider resources or the dashboard.
+`CODEX_BIN` is server-side configuration only. Missing Codex installation or
+authentication is an independent provider-unavailable state and does not stop
+the Capacity subsystem or other providers.
 
 ## 3. Hub API responsibilities
 

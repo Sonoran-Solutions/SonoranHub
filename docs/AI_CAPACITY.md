@@ -247,9 +247,66 @@ prints sanitized normalized resources.
 
 ### Collection strategy
 
-Prefer a local Agent-side integration with the authenticated Codex app-server rather than extracting browser cookies or copying raw ChatGPT credentials to Hub.
+The current Hub-local collector uses the official authenticated local `codex
+app-server` over stdio. It does not scrape ChatGPT, read browser cookies, call
+private HTTP endpoints, parse the Codex TUI, or copy OAuth credentials into Hub.
+The browser never talks to Codex directly. Collection remains in the Hub API
+until Sonoran Agent exists; the `CodexCapacitySource` boundary is deliberately
+transport-neutral so the same source can move behind Agent later.
 
-The adapter boundary should hide the exact Codex protocol from the rest of Sonoran Hub. Version-pin and integration-test against known Codex versions because this is an evolving client protocol.
+The source lazily starts one reusable `codex app-server` child per API runtime,
+performs the official `initialize` / `initialized` handshake, and reads
+`account/read` with `refreshToken: false` followed by
+`account/rateLimits/read`. Startup, initialize, request, and shutdown all have
+finite timeouts. A failed or exited child is discarded and a later refresh may
+start one replacement; the API closes the child during shutdown. Stdout is
+JSONL protocol traffic, stderr is bounded/redacted diagnostics only.
+Sparse `account/rateLimits/updated` notifications are parsed as notifications
+and ignored for state mutation in this first slice; the existing 60-second
+poll remains the only refresh trigger, so notifications cannot create
+overlapping reads.
+
+The adapter boundary hides the exact evolving Codex protocol from the rest of
+Sonoran Hub. The local CLI version is retained only as safe collector metadata
+when the app-server exposes it.
+
+Set `CODEX_BIN` in the server/API environment to override the executable path;
+the default is `codex`. This is not a Vite/browser variable. The local CLI must
+already be authenticated to an appropriate ChatGPT-backed Codex account. An
+API-key-only or unsupported provider-mode account is reported unavailable for
+this subscription-capacity adapter.
+
+The read-only developer smoke test is opt-in:
+
+```bash
+pnpm smoke:codex
+```
+
+It performs no inference, thread, turn, login, logout, or reset-credit
+redemption and prints only sanitized normalized fields.
+
+### Normalization
+
+`rateLimitsByLimitId` is preferred and the legacy `rateLimits` view is used as
+a non-duplicating fallback. Primary and secondary windows become separate
+resources. Primary is `rolling_quota`; secondary is `weekly_quota` only when
+Codex reports exactly 10080 minutes. All other durations remain
+`rolling_quota`, and display names are generated from the actual duration.
+`usedPercent` is validated and inverted to remaining capacity; reset Unix
+seconds are stored as ISO-8601 UTC. Additional limit buckets retain safe
+provider names/model slugs in metadata.
+
+`ordinaryUsageAllowed`, `rateLimitReachedType`, and spend-control state are
+preserved in metadata and affect presentation status. Credits are not assumed
+to be USD. The optional spend-control snapshot exposes only validated percent
+and reset semantics while retaining its raw amount strings as provider
+metadata. Available reset credits use the authoritative `availableCount`; the
+detail rows and opaque IDs are never sent to the browser.
+
+Codex provider resources use `source: official_cli`. No database migration is
+required: successful normalized results use the existing
+`CapacityService → CapacitySnapshotStore → PostgreSQL` pipeline and appear in
+`GET /capacity` and `GET /capacity/history?provider=codex`.
 
 ### Security rule
 

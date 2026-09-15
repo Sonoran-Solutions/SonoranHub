@@ -8,10 +8,13 @@ import type {
 
 import {
   createCapacityPoller,
+  codexMainQuotaResources,
+  codexPlanLabel,
   deepSeekPricingPresentation,
   formatRelativeAge,
   freshnessLabel,
   formatPercent,
+  formatRelativeReset,
   initialCapacityState,
   primaryResource,
   providerLabel,
@@ -182,6 +185,8 @@ function ProviderCard({
 }) {
   const resources = provider.snapshot?.resources ?? [];
   const primary = primaryResource(resources);
+  const codexMainQuotas = codexMainQuotaResources(resources);
+  const plan = codexPlanLabel(resources);
   const pricing =
     provider.providerId === 'deepseek'
       ? deepSeekPricingPresentation(
@@ -205,6 +210,7 @@ function ProviderCard({
           <h3>{providerLabel(provider.providerId)}</h3>
         </div>
         <div className="provider-badges">
+          {plan ? <span className="plan-badge">{plan}</span> : null}
           {pricing ? (
             <span className={`pricing-badge pricing-${pricing.tone}`}>{pricing.badge}</span>
           ) : null}
@@ -223,13 +229,33 @@ function ProviderCard({
       </div>
 
       {compact ? (
-        <div className="compact-summary">
-          <strong>{primary ? resourceValue(primary) : 'No data yet'}</strong>
-          {primary?.kind === 'wallet' && primary.remainingPercent !== undefined ? (
-            <span>{formatPercent(primary.remainingPercent)} of credits</span>
-          ) : null}
-          {pricing ? <span>{pricing.summary}</span> : null}
-        </div>
+        provider.providerId === 'codex' ? (
+          <div className="compact-summary">
+            {codexMainQuotas.length > 0 ? (
+              <div className="compact-quota-list">
+                {codexMainQuotas.map((resource) => (
+                  <div className="compact-quota" key={resource.id}>
+                    <span>{resource.name}</span>
+                    <strong>{formatPercent(resource.remainingPercent)}</strong>
+                    {resource.resetAt ? (
+                      <small>{`Resets ${formatRelativeReset(resource.resetAt, now)}`}</small>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <strong>No data yet</strong>
+            )}
+          </div>
+        ) : (
+          <div className="compact-summary">
+            <strong>{primary ? resourceValue(primary) : 'No data yet'}</strong>
+            {primary?.kind === 'wallet' && primary.remainingPercent !== undefined ? (
+              <span>{formatPercent(primary.remainingPercent)} of credits</span>
+            ) : null}
+            {pricing ? <span>{pricing.summary}</span> : null}
+          </div>
+        )
       ) : (
         <div className="resource-list">
           {resources.length === 0 ? (
@@ -237,7 +263,9 @@ function ProviderCard({
               No snapshot yet. The API will show data after a collection succeeds.
             </p>
           ) : (
-            resources.map((resource) => <ResourceRow key={resource.id} resource={resource} />)
+            resources.map((resource) => (
+              <ResourceRow key={resource.id} now={now} resource={resource} />
+            ))
           )}
         </div>
       )}
@@ -260,8 +288,8 @@ function ProviderCard({
   );
 }
 
-function ResourceRow({ resource }: { resource: CapacityResource }) {
-  const detail = resourceDetail(resource);
+function ResourceRow({ resource, now }: { resource: CapacityResource; now: number }) {
+  const detail = resourceDetail(resource, now);
   return (
     <div className="resource-row">
       <div className="resource-heading">
