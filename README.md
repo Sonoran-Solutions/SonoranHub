@@ -124,8 +124,10 @@ pnpm dev:agent  # startup-only Sonoran Agent process
 The API exposes `GET /health`, `GET /capacity`, and bounded
 `GET /capacity/history?provider=&since=&limit=`. Open
 `http://127.0.0.1:5173/capacity` for the responsive Capacity dashboard. The
-default refresh interval is five minutes and can be changed with
-`CAPACITY_REFRESH_INTERVAL_MS`. The API allows browser requests from the
+provider refresh default is every 60 seconds and can be changed with
+`CAPACITY_REFRESH_INTERVAL_MS`. The browser polls the Hub API every 15 seconds
+for persisted snapshots; it never calls DeepSeek or OpenRouter directly. The
+API allows browser requests from the
 comma-separated origins in `WEB_ORIGIN`; by default this includes both
 `http://127.0.0.1:5173` and `http://localhost:5173`.
 

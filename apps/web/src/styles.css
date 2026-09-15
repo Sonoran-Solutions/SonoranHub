@@ -39,8 +39,13 @@ p {
   align-items: center;
   border-bottom: 1px solid #263652;
   display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
   justify-content: space-between;
   padding: 1.25rem clamp(1rem, 4vw, 3rem);
+}
+.topbar > div {
+  min-width: 0;
 }
 .eyebrow {
   color: #7dd3fc;
@@ -58,8 +63,12 @@ h1 {
   border: 1px solid #2c5270;
   border-radius: 999px;
   color: #bae6fd;
+  flex: 0 1 auto;
   font-size: 0.8rem;
+  max-width: 100%;
   padding: 0.45rem 0.75rem;
+  overflow-wrap: anywhere;
+  text-align: center;
 }
 .workspace {
   display: grid;
@@ -165,7 +174,21 @@ h1 {
   font-size: 1.3rem;
   margin: 0;
 }
+.provider-card-heading > div:first-child,
+.resource-heading > strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.provider-badges {
+  align-items: flex-end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: flex-end;
+  min-width: 0;
+}
 .state-badge,
+.pricing-badge,
 .status-text,
 .freshness-text {
   border-radius: 999px;
@@ -180,6 +203,19 @@ h1 {
   background: #12352f;
   color: #86efac;
 }
+.badge-warning,
+.pricing-unknown {
+  background: #3a2c15;
+  color: #fcd34d;
+}
+.pricing-peak {
+  background: #4a2530;
+  color: #fda4af;
+}
+.pricing-normal {
+  background: #193755;
+  color: #bae6fd;
+}
 .badge-unknown,
 .status-unknown,
 .status-warning,
@@ -191,6 +227,10 @@ h1 {
 .status-exhausted {
   background: #3b1d28;
   color: #fda4af;
+}
+.status-unbounded {
+  background: #193755;
+  color: #bae6fd;
 }
 .freshness-fresh {
   background: #12352f;
@@ -239,6 +279,10 @@ h1 {
   margin-top: 0.75rem;
   padding-top: 0.75rem;
 }
+.provider-footer > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .compact-summary {
   display: grid;
   gap: 0.25rem;
@@ -246,6 +290,11 @@ h1 {
 }
 .compact-summary strong {
   font-size: 1.2rem;
+}
+.refresh-status {
+  color: #9fb0c7;
+  font-size: 0.8rem;
+  margin: 0.75rem 0;
 }
 .state-panel {
   background: #111d31;
@@ -268,8 +317,8 @@ h1 {
   }
   .sidebar {
     flex-direction: row;
+    flex-wrap: wrap;
     margin-bottom: 1rem;
-    overflow-x: auto;
     padding-bottom: 0.25rem;
   }
   .nav-item {
@@ -301,6 +350,9 @@ h1 {
   .resource-heading {
     align-items: flex-start;
     flex-direction: column;
+  }
+  .provider-badges {
+    justify-content: flex-start;
   }
   .resource-tags {
     justify-content: flex-start;

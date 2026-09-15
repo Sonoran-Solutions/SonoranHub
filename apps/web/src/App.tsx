@@ -7,12 +7,19 @@ import type {
 } from '@sonoran-hub/contracts';
 
 import {
-  formatTimestamp,
+  createCapacityPoller,
+  deepSeekPricingPresentation,
+  formatRelativeAge,
   freshnessLabel,
+  formatPercent,
+  initialCapacityState,
+  primaryResource,
   providerLabel,
+  providerSummaryStatus,
   resourceDetail,
+  resourceStatusLabel,
   resourceValue,
-  statusLabel,
+  type CapacityState,
 } from './capacityViewModel.js';
 
 const sections = [
@@ -24,12 +31,6 @@ const sections = [
 ];
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:3000';
-
-interface CapacityState {
-  readonly status: 'loading' | 'success' | 'error';
-  readonly data?: CapacityCurrentResponse;
-  readonly message?: string;
-}
 
 export function App() {
   const [path, setPath] = useState(() => window.location.pathname);
@@ -118,9 +119,7 @@ function CapacityPage() {
           <h2>AI Capacity</h2>
           <p>Normalized provider information collected by Sonoran Hub.</p>
         </div>
-        {capacity.data ? (
-          <span className="updated">API view {formatTimestamp(capacity.data.generatedAt)}</span>
-        ) : null}
+        <span className="updated">Hub API polls every 15s</span>
       </section>
       <CapacityStateView state={capacity} />
     </main>
@@ -134,6 +133,7 @@ function CapacityStateView({
   state: CapacityState;
   compact?: boolean;
 }) {
+  const now = useCurrentTime();
   if (state.status === 'loading') {
     return <div className="state-panel">Loading capacity…</div>;
   }
@@ -149,30 +149,53 @@ function CapacityStateView({
     return <div className="state-panel">No capacity providers are registered yet.</div>;
   }
   return (
-    <section className={compact ? 'provider-grid compact-grid' : 'provider-grid'}>
-      {state.data.providers.map((provider) => (
-        <ProviderCard compact={compact} key={provider.providerId} provider={provider} />
-      ))}
-    </section>
+    <>
+      <CapacityRefreshStatus state={state} />
+      <section className={compact ? 'provider-grid compact-grid' : 'provider-grid'}>
+        {state.data.providers.map((provider) => (
+          <ProviderCard compact={compact} key={provider.providerId} now={now} provider={provider} />
+        ))}
+      </section>
+    </>
+  );
+}
+
+function CapacityRefreshStatus({ state }: { state: CapacityState }) {
+  if (state.status !== 'success' || (!state.refreshing && !state.refreshError)) {
+    return null;
+  }
+  return (
+    <p className="refresh-status" role="status">
+      {state.refreshing ? 'Updating…' : `Update failed: ${state.refreshError}`}
+    </p>
   );
 }
 
 function ProviderCard({
   provider,
   compact,
+  now,
 }: {
   provider: CapacityCurrentProvider;
   compact: boolean;
+  now: number;
 }) {
   const resources = provider.snapshot?.resources ?? [];
-  const primary = resources.find((resource) => resource.kind === 'wallet') ?? resources[0];
-  const hasUnknown = resources.some((resource) => resource.status === 'unknown');
+  const primary = primaryResource(resources);
+  const pricing =
+    provider.providerId === 'deepseek'
+      ? deepSeekPricingPresentation(
+          resources.find((resource) => resource.kind === 'pricing_window'),
+        )
+      : undefined;
   const unavailable = provider.health.available === false && !provider.snapshot;
-  const providerState = unavailable
-    ? 'Provider unavailable'
-    : hasUnknown
-      ? 'Partial provider data'
-      : 'Provider data available';
+  const summaryStatus = providerSummaryStatus(resources, unavailable);
+  const providerState =
+    summaryStatus === 'unavailable'
+      ? 'Provider unavailable'
+      : summaryStatus === 'partial'
+        ? 'Partial provider data'
+        : 'Provider data available';
 
   return (
     <article className="provider-card">
@@ -181,19 +204,31 @@ function ProviderCard({
           <p className="eyebrow">Provider</p>
           <h3>{providerLabel(provider.providerId)}</h3>
         </div>
-        <span className={`state-badge ${unavailable ? 'badge-unknown' : 'badge-available'}`}>
-          {providerState}
-        </span>
+        <div className="provider-badges">
+          {pricing ? (
+            <span className={`pricing-badge pricing-${pricing.tone}`}>{pricing.badge}</span>
+          ) : null}
+          <span
+            className={`state-badge ${
+              summaryStatus === 'unavailable'
+                ? 'badge-unknown'
+                : summaryStatus === 'partial'
+                  ? 'badge-warning'
+                  : 'badge-available'
+            }`}
+          >
+            {providerState}
+          </span>
+        </div>
       </div>
 
       {compact ? (
         <div className="compact-summary">
           <strong>{primary ? resourceValue(primary) : 'No data yet'}</strong>
-          {resources
-            .filter((resource) => resource.kind === 'pricing_window')
-            .map((resource) => (
-              <span key={resource.id}>{resourceValue(resource)}</span>
-            ))}
+          {primary?.kind === 'wallet' && primary.remainingPercent !== undefined ? (
+            <span>{formatPercent(primary.remainingPercent)} of credits</span>
+          ) : null}
+          {pricing ? <span>{pricing.summary}</span> : null}
         </div>
       ) : (
         <div className="resource-list">
@@ -210,9 +245,13 @@ function ProviderCard({
       <div className="provider-footer">
         <span>
           {provider.snapshot
-            ? `Updated ${formatTimestamp(provider.snapshot.collectedAt)}`
+            ? `Updated ${formatRelativeAge(provider.snapshot.collectedAt, now)}`
             : (provider.health.lastError?.message ?? 'Waiting for first collection')}
         </span>
+        {provider.snapshot ? <span>Refreshes every 1 min</span> : null}
+        {provider.snapshot?.freshness === 'stale' ? (
+          <span className="footer-warning">STALE snapshot</span>
+        ) : null}
         {provider.health.lastProbeFailure ? (
           <span className="footer-warning">Probe: {provider.health.lastProbeFailure.message}</span>
         ) : null}
@@ -228,8 +267,14 @@ function ResourceRow({ resource }: { resource: CapacityResource }) {
       <div className="resource-heading">
         <strong>{resource.name}</strong>
         <div className="resource-tags">
-          <span className={`status-text status-${resource.status}`}>
-            {statusLabel(resource.status)}
+          <span
+            className={`status-text ${
+              resourceStatusLabel(resource) === 'UNBOUNDED'
+                ? 'status-unbounded'
+                : `status-${resource.status}`
+            }`}
+          >
+            {resourceStatusLabel(resource)}
           </span>
           <span className={`freshness-text freshness-${resource.freshness}`}>
             {freshnessLabel(resource.freshness)}
@@ -244,30 +289,33 @@ function ResourceRow({ resource }: { resource: CapacityResource }) {
 }
 
 function useCapacity(): CapacityState {
-  const [state, setState] = useState<CapacityState>({ status: 'loading' });
+  const [state, setState] = useState<CapacityState>(initialCapacityState);
 
   useEffect(() => {
-    const controller = new AbortController();
-    setState({ status: 'loading' });
-    fetch(`${apiBaseUrl}/capacity`, { signal: controller.signal })
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error('The Hub API did not return capacity data.');
-        }
-        return (await response.json()) as CapacityCurrentResponse;
-      })
-      .then((data) => setState({ status: 'success', data }))
-      .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === 'AbortError') {
-          return;
-        }
-        setState({
-          status: 'error',
-          message: error instanceof Error ? error.message : 'The capacity request failed.',
-        });
-      });
-    return () => controller.abort();
+    const poller = createCapacityPoller({
+      fetchCapacity: (signal) => fetchCapacity(signal),
+      onState: setState,
+    });
+    poller.start();
+    return () => poller.stop();
   }, []);
 
   return state;
+}
+
+async function fetchCapacity(signal: AbortSignal): Promise<CapacityCurrentResponse> {
+  const response = await fetch(`${apiBaseUrl}/capacity`, { signal });
+  if (!response.ok) {
+    throw new Error('The Hub API did not return capacity data.');
+  }
+  return (await response.json()) as CapacityCurrentResponse;
+}
+
+function useCurrentTime(): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return now;
 }

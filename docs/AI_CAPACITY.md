@@ -290,6 +290,12 @@ migrations during normal startup. Snapshots are returned newest first from
 is `GET /capacity` and returns one latest snapshot per registered provider,
 plus safe provider health information.
 
+Runtime refresh cadence is intentionally split between providers and the UI:
+
+- provider adapters refresh independently every 60 seconds by default, controlled by `CAPACITY_REFRESH_INTERVAL_MS`;
+- the browser polls the Hub API every 15 seconds for persisted snapshots;
+- the browser never calls DeepSeek or OpenRouter directly, and a page refresh does not trigger provider API requests.
+
 Recommended fields:
 
 - provider/source ID;

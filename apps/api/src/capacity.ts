@@ -13,7 +13,7 @@ import {
 } from '@sonoran-hub/ai-capacity';
 import { createStructuredLogger, type AppConfig, type StructuredLogger } from '@sonoran-hub/config';
 
-const DEFAULT_REFRESH_INTERVAL_MS = 5 * 60_000;
+const DEFAULT_REFRESH_INTERVAL_MS = 60_000;
 
 export interface CapacityRuntimeEnvironment {
   readonly DATABASE_URL?: string;
