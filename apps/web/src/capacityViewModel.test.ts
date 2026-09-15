@@ -7,11 +7,14 @@ import {
   codexMainQuotaResources,
   codexPlanLabel,
   deepSeekPricingPresentation,
+  geminiCompactQuotaResources,
+  geminiPlanLabel,
   DEFAULT_UI_POLL_INTERVAL_MS,
   formatRelativeAge,
   formatRelativeReset,
   freshnessLabel,
   isSemanticallyKnownResource,
+  isDisabledResource,
   pricingTransitionLabel,
   primaryResource,
   providerSummaryStatus,
@@ -208,6 +211,41 @@ describe('capacity presentation helpers', () => {
     expect(resourceStatusLabel({ ...mainPrimary, status: 'available', freshness: 'stale' })).toBe(
       'available',
     );
+  });
+
+  it('presents Gemini buckets independently and keeps disabled quota truthful', () => {
+    const active: CapacityResource = {
+      ...base,
+      id: 'gemini-models-weekly',
+      provider: 'gemini',
+      kind: 'weekly_quota',
+      name: 'Gemini Models · Weekly',
+      unit: 'percent',
+      remaining: 4,
+      remainingPercent: 4,
+      status: 'critical',
+      freshness: 'fresh',
+      metadata: { plan_tier: 'Google AI Pro' },
+    };
+    const disabled: CapacityResource = {
+      ...active,
+      id: 'gemini-models-disabled',
+      name: 'Gemini Models · Disabled',
+      status: 'unknown',
+      remaining: undefined,
+      remainingPercent: undefined,
+      freshness: 'unknown',
+      metadata: { disabled: true, plan_tier: 'Google AI Pro' },
+    };
+    expect(providerLabel('gemini')).toBe('Gemini');
+    expect(geminiPlanLabel([active])).toBe('Google AI Pro');
+    expect(geminiCompactQuotaResources([disabled, active])).toEqual([active]);
+    expect(isDisabledResource(disabled)).toBe(true);
+    expect(resourceStatusLabel(disabled)).toBe('DISABLED');
+    expect(resourceValue(disabled)).toBe('Disabled');
+    expect(isSemanticallyKnownResource(disabled)).toBe(true);
+    expect(providerSummaryStatus([active], false)).toBe('available');
+    expect(providerSummaryStatus([{ ...active, status: 'exhausted' }], false)).toBe('available');
   });
 
   it('selects compact Codex quotas by semantic main-bucket metadata', () => {

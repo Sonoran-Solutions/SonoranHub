@@ -7,10 +7,12 @@ import {
   CapacityService,
   CodexCapacityAdapter,
   DeepSeekCapacityAdapter,
+  GeminiCapacityAdapter,
   InMemoryCapacitySnapshotStore,
   OpenRouterCapacityAdapter,
   PostgresCapacitySnapshotStore,
   type CodexCapacitySource,
+  type GeminiCapacitySource,
   type CapacitySnapshotStore,
 } from '@sonoran-hub/ai-capacity';
 import { createStructuredLogger, type AppConfig, type StructuredLogger } from '@sonoran-hub/config';
@@ -23,6 +25,7 @@ export interface CapacityRuntimeEnvironment {
   readonly OPENROUTER_MANAGEMENT_KEY?: string;
   readonly DEEPSEEK_API_KEY?: string;
   readonly CODEX_BIN?: string;
+  readonly AGY_BIN?: string;
   readonly CAPACITY_REFRESH_INTERVAL_MS?: string;
 }
 
@@ -32,6 +35,7 @@ export interface CapacityRuntimeOptions {
   readonly logger?: StructuredLogger;
   readonly store?: CapacitySnapshotStore;
   readonly codexSource?: CodexCapacitySource;
+  readonly geminiSource?: GeminiCapacitySource;
 }
 
 export interface CapacityRuntime {
@@ -66,6 +70,14 @@ export function createCapacityRuntime(options: CapacityRuntimeOptions): Capacity
     },
   });
   registry.register(codex);
+  const gemini = new GeminiCapacityAdapter({
+    source: options.geminiSource,
+    sourceOptions: {
+      executable: options.environment.AGY_BIN || 'agy',
+      onDiagnostic: (message) => logger.debug('capacity.gemini.stderr', { metadata: { message } }),
+    },
+  });
+  registry.register(gemini);
 
   let pool: Pool | undefined;
   let store = options.store;
@@ -108,6 +120,7 @@ export function createCapacityRuntime(options: CapacityRuntimeOptions): Capacity
     async stop() {
       scheduler.stop();
       await codex.close();
+      await gemini.close();
       await pool?.end();
     },
   };

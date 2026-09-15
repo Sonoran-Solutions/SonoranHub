@@ -314,7 +314,69 @@ Hub should receive normalized quota state, not reusable authentication tokens.
 
 ## 7. Gemini
 
-Gemini is expected to be the least stable initial collector.
+Gemini capacity is sourced through the official authenticated Antigravity CLI,
+not through an unofficial Google quota API. The individual-account Gemini CLI
+workflow was superseded by Antigravity for this collector. Hub never reads
+browser cookies or Google OAuth credentials, calls private Antigravity
+endpoints, scrapes the TUI, or submits a normal model prompt.
+
+The server-side `AGY_BIN` setting overrides the executable and defaults to
+`agy`; it is never exposed through Vite/browser environment variables. The
+collector invokes short-lived, bounded, read-only commands from a neutral
+directory:
+
+```text
+agy -p "/quota" --output-format json
+agy -p "/credits" --output-format json
+```
+
+The verified local CLI was `agy 1.2.3`. Official release notes identify
+structured, zero-turn print-mode support for `/usage`, `/quota`, and
+`/credits` beginning in 1.1.11, which is the minimum behavior guarded by Hub.
+Hub validates the process envelope, command payload, and `num_turns === 0`;
+an ordinary model-turn envelope is rejected and its prose is never parsed as
+quota. `/usage` is not run because the current `/quota` payload already
+contains the useful quota groups.
+
+The source boundary is deliberately transport-neutral:
+
+```text
+Hub API
+  -> GeminiCapacityAdapter
+  -> GeminiCapacitySource
+  -> AntigravityCliSource
+  -> official `agy` CLI
+```
+
+Each quota group/bucket is retained as a separate normalized resource using
+the provider-reported identity, window, remaining fraction/percentage, and
+reset timestamp. Relative resets, if exposed by a future supported schema, are
+converted once at collection time and marked as derived. Disabled buckets are
+not converted into exhausted zero-percent resources; they remain known with a
+`DISABLED` presentation. G1/AI credits are a separate `credits` resource and
+are never labeled USD. Quota and credits are collected independently, so a
+valid result from one is retained when the other fails.
+
+The CLI process has bounded stdout/stderr, an 8-second command timeout, and
+SIGTERM/SIGKILL cleanup. Missing/old CLI versions, authentication failures,
+malformed structured data, unexpected agent turns, and timeouts are reported
+through the existing provider failure taxonomy. Only normalized data and
+bounded safe metadata are persisted through the existing PostgreSQL snapshot
+store; raw CLI output, identities, credentials, and environment values are
+not persisted.
+
+Use the opt-in read-only smoke test after installing and authenticating
+Antigravity:
+
+```bash
+pnpm smoke:gemini
+```
+
+It reports only sanitized version, provider, plan/tier (when safely exposed),
+quota buckets, reset values, credits, and zero-turn validation. Provider
+refresh remains 60 seconds and browser polling remains 15 seconds. A future
+Sonoran Agent can own the same source boundary without changing normalized
+Gemini resources.
 
 ### Adapter requirement
 

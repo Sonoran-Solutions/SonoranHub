@@ -139,7 +139,9 @@ export function providerLabel(providerId: string): string {
       ? 'DeepSeek'
       : providerId === 'codex'
         ? 'Codex'
-        : providerId;
+        : providerId === 'gemini'
+          ? 'Gemini'
+          : providerId;
 }
 
 export function formatMoney(value: number | undefined): string {
@@ -260,8 +262,16 @@ export function isUnboundedResource(resource: CapacityResource): boolean {
   return resource.metadata?.budget_state === 'unbounded';
 }
 
+export function isDisabledResource(resource: CapacityResource): boolean {
+  return resource.metadata?.disabled === true;
+}
+
 export function isSemanticallyKnownResource(resource: CapacityResource): boolean {
-  return isUnboundedResource(resource) || (resource.status !== 'unknown' && !resource.error);
+  return (
+    isUnboundedResource(resource) ||
+    isDisabledResource(resource) ||
+    (resource.status !== 'unknown' && !resource.error)
+  );
 }
 
 export function providerSummaryStatus(
@@ -277,7 +287,29 @@ export function providerSummaryStatus(
 }
 
 export function resourceStatusLabel(resource: CapacityResource): string {
+  if (isDisabledResource(resource)) return 'DISABLED';
   return isUnboundedResource(resource) ? 'UNBOUNDED' : statusLabel(resource.status);
+}
+
+export function geminiCompactQuotaResources(
+  resources: readonly CapacityResource[],
+): readonly CapacityResource[] {
+  return resources
+    .filter(
+      (resource) =>
+        resource.provider === 'gemini' &&
+        (resource.kind === 'rolling_quota' || resource.kind === 'weekly_quota') &&
+        !isDisabledResource(resource),
+    )
+    .slice(0, 3);
+}
+
+export function geminiPlanLabel(resources: readonly CapacityResource[]): string | undefined {
+  const plan = resources.find(
+    (resource) =>
+      resource.provider === 'gemini' && typeof resource.metadata?.plan_tier === 'string',
+  )?.metadata?.plan_tier;
+  return typeof plan === 'string' && plan.trim() ? plan : undefined;
 }
 
 export function primaryResource(
@@ -318,6 +350,7 @@ export function codexPlanLabel(resources: readonly CapacityResource[]): string |
 }
 
 export function resourceValue(resource: CapacityResource): string {
+  if (isDisabledResource(resource)) return 'Disabled';
   if (isUnboundedResource(resource)) {
     return 'No spending cap configured';
   }

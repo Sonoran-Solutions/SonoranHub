@@ -11,6 +11,8 @@ import {
   codexMainQuotaResources,
   codexPlanLabel,
   deepSeekPricingPresentation,
+  geminiCompactQuotaResources,
+  geminiPlanLabel,
   formatRelativeAge,
   freshnessLabel,
   formatPercent,
@@ -22,6 +24,7 @@ import {
   resourceDetail,
   resourceStatusLabel,
   resourceValue,
+  isDisabledResource,
   type CapacityState,
 } from './capacityViewModel.js';
 
@@ -186,7 +189,9 @@ function ProviderCard({
   const resources = provider.snapshot?.resources ?? [];
   const primary = primaryResource(resources);
   const codexMainQuotas = codexMainQuotaResources(resources);
-  const plan = codexPlanLabel(resources);
+  const geminiQuotas = geminiCompactQuotaResources(resources);
+  const plan =
+    provider.providerId === 'gemini' ? geminiPlanLabel(resources) : codexPlanLabel(resources);
   const pricing =
     provider.providerId === 'deepseek'
       ? deepSeekPricingPresentation(
@@ -245,6 +250,24 @@ function ProviderCard({
               </div>
             ) : (
               <strong>No data yet</strong>
+            )}
+          </div>
+        ) : provider.providerId === 'gemini' ? (
+          <div className="compact-summary">
+            {geminiQuotas.length > 0 ? (
+              <div className="compact-quota-list">
+                {geminiQuotas.map((resource) => (
+                  <div className="compact-quota" key={resource.id}>
+                    <span>{resource.name}</span>
+                    <strong>{formatPercent(resource.remainingPercent)}</strong>
+                    {resource.resetAt ? (
+                      <small>{`Resets ${formatRelativeReset(resource.resetAt, now)}`}</small>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <strong>No active quota data yet</strong>
             )}
           </div>
         ) : (
@@ -310,6 +333,18 @@ function ResourceRow({ resource, now }: { resource: CapacityResource; now: numbe
         </div>
       </div>
       <strong className="resource-value">{resourceValue(resource)}</strong>
+      {resource.remainingPercent !== undefined && !isDisabledResource(resource) ? (
+        <div
+          aria-label={`${formatPercent(resource.remainingPercent)} remaining`}
+          aria-valuemax={100}
+          aria-valuemin={0}
+          aria-valuenow={resource.remainingPercent}
+          className={`capacity-bar capacity-bar-${resource.status}`}
+          role="progressbar"
+        >
+          <span style={{ width: `${resource.remainingPercent}%` }} />
+        </div>
+      ) : null}
       {detail ? <span className="resource-detail">{detail}</span> : null}
       {resource.error ? <span className="resource-error">{resource.error.message}</span> : null}
     </div>

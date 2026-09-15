@@ -78,7 +78,7 @@ The provider adapters and GitHub integration are boundaries, not places for prod
 The first end-to-end Capacity path is:
 
 ```text
-OpenRouter / DeepSeek / Codex adapters
+OpenRouter / DeepSeek / Codex / Gemini adapters
   -> CapacityCoordinator and D1 scheduler
   -> CapacityService
   -> CapacitySnapshotStore -> PostgreSQL
@@ -110,6 +110,31 @@ contract without changing normalized provider resources or the dashboard.
 `CODEX_BIN` is server-side configuration only. Missing Codex installation or
 authentication is an independent provider-unavailable state and does not stop
 the Capacity subsystem or other providers.
+
+Gemini follows the same boundary-first rule but uses the official
+Antigravity CLI's short-lived structured read-only commands rather than a
+persistent process:
+
+```text
+Hub API Capacity runtime
+  -> GeminiCapacityAdapter
+  -> GeminiCapacitySource
+  -> AntigravityCliSource
+  -> `agy -p "/quota" --output-format json`
+  -> `agy -p "/credits" --output-format json`
+```
+
+`AGY_BIN` is server-side configuration only and defaults to `agy`. The source
+runs from a neutral directory with `shell: false`, finite output/timeout
+limits, and SIGTERM/SIGKILL cleanup. It accepts only the official structured
+command envelope with `num_turns: 0`; a normal model-turn response is a hard
+failure so an old CLI cannot burn quota while pretending to answer `/quota`.
+The minimum guarded behavior is Antigravity CLI 1.1.11; the local validated
+version is 1.2.3. No browser cookies, OAuth credentials, private endpoints,
+TUI scraping, or normal model prompts are involved. The adapter keeps
+Antigravity quota groups/buckets and G1/AI credits as separate normalized
+Gemini resources and preserves partial success. As with Codex, this source
+can later move behind Sonoran Agent without changing the dashboard contract.
 
 ## 3. Hub API responsibilities
 

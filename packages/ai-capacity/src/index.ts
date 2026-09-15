@@ -115,6 +115,47 @@ export {
   type CodexRateLimitWindow,
   type CodexRateLimitsResponse,
 } from './providers/codex/index.js';
+export {
+  GEMINI_PROVIDER_ID,
+  GeminiCapacityAdapter,
+  type GeminiCapacityAdapterOptions,
+} from './providers/gemini/index.js';
+export {
+  GEMINI_MINIMUM_AGY_VERSION,
+  GEMINI_PROTOCOL_SOURCE,
+  AntigravityCliSource,
+  type AntigravityCliSourceOptions,
+  type GeminiCapacitySnapshot,
+  type GeminiCapacitySource,
+  type GeminiSourceAvailability,
+  type GeminiSourceFailure,
+} from './providers/gemini/index.js';
+export {
+  antigravityCreditsDataSchema,
+  antigravityProcessEnvelopeSchema,
+  antigravityQuotaBucketSchema,
+  antigravityQuotaDataSchema,
+  antigravityQuotaGroupSchema,
+  GeminiNormalizationError,
+  geminiCollectionError,
+  geminiQuotaStatus,
+  normalizeGeminiCapacity,
+  sanitizeGeminiResourceId,
+  type AntigravityCreditsData,
+  type AntigravityProcessEnvelope,
+  type AntigravityQuotaBucket,
+  type AntigravityQuotaData,
+  type AntigravityQuotaGroup,
+} from './providers/gemini/index.js';
+export {
+  AntigravityCliError,
+  AntigravityCliExecutor,
+  spawnAntigravityProcess,
+  type AntigravityChildProcess,
+  type AntigravityCliExecutorOptions,
+  type AntigravityProcessResult,
+  type AntigravitySpawn,
+} from './providers/gemini/index.js';
 export type {
   AdapterAvailability,
   CapacityRefreshTarget,
