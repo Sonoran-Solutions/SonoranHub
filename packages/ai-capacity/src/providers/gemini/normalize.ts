@@ -144,7 +144,7 @@ function creditsResource(
     antigravity_version: snapshot.antigravityVersion,
   };
   if (snapshot.planTier) metadata.plan_tier = snapshot.planTier;
-  if (data.upgrade_uri) metadata.upgrade_uri = data.upgrade_uri;
+  if (data.upgrade_uri) metadata.upgrade_available = true;
   if (data.enabled === false) {
     return {
       id: 'gemini-g1-credits',

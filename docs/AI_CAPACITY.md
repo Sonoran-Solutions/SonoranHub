@@ -354,8 +354,10 @@ reset timestamp. Relative resets, if exposed by a future supported schema, are
 converted once at collection time and marked as derived. Disabled buckets are
 not converted into exhausted zero-percent resources; they remain known with a
 `DISABLED` presentation. G1/AI credits are a separate `credits` resource and
-are never labeled USD. Quota and credits are collected independently, so a
-valid result from one is retained when the other fails.
+are never labeled USD; an upgrade URI is reduced to the semantic
+`upgrade_available` boolean and is never stored or returned. Quota and credits
+are collected independently, so a valid result from one is retained when the
+other fails.
 
 The CLI process has bounded stdout/stderr, an 8-second command timeout, and
 SIGTERM/SIGKILL cleanup. Missing/old CLI versions, authentication failures,

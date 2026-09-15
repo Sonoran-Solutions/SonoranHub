@@ -120,7 +120,13 @@ describe('Gemini normalization', () => {
 
   it('normalizes credits without labeling them as dollars', () => {
     const [resource] = normalizeGeminiCapacity(
-      snapshot({ quota: undefined, credits: { remaining_credits: 0 } }),
+      snapshot({
+        quota: undefined,
+        credits: {
+          remaining_credits: 0,
+          upgrade_uri: 'https://example.invalid/upgrade?account_id=secret',
+        },
+      }),
       collectedAt,
     );
     expect(resource).toMatchObject({
@@ -128,8 +134,11 @@ describe('Gemini normalization', () => {
       unit: 'credits',
       remaining: 0,
       status: 'exhausted',
-      metadata: { credits_state: 'reported' },
+      metadata: { credits_state: 'reported', upgrade_available: true },
     });
+    expect(resource?.metadata).not.toHaveProperty('upgrade_uri');
+    expect(JSON.stringify(resource)).not.toContain('example.invalid');
+    expect(JSON.stringify(resource)).not.toContain('account_id');
   });
 
   it('preserves credits when quota collection failed', () => {

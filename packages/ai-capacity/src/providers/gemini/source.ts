@@ -122,9 +122,6 @@ function parseJsonEnvelope(result: AntigravityProcessResult, command: string) {
       'Antigravity CLI output exceeded the safety limit',
     );
   }
-  if (result.exitCode !== 0 && result.exitCode !== null) {
-    throw new GeminiSourceError('provider_error', `Antigravity CLI command failed for ${command}`);
-  }
   const text = result.stdout.trim();
   if (!text) {
     throw new GeminiSourceError(
@@ -177,12 +174,28 @@ function parseJsonEnvelope(result: AntigravityProcessResult, command: string) {
         : `Antigravity CLI rejected ${command} (exit ${safeStatus(result)})`,
     );
   }
+  if (result.exitCode !== 0 && result.exitCode !== null) {
+    throw new GeminiSourceError('provider_error', `Antigravity CLI command failed for ${command}`);
+  }
   // This is the critical quota-burn guard. A normal model response is never
   // interpreted as capacity, even if it happens to contain quota-like prose.
   if (envelope.data.num_turns !== 0 || envelope.data.command === undefined) {
     throw new GeminiSourceError(
       'invalid_response',
       `Installed Antigravity version did not execute ${command} as a read-only command`,
+    );
+  }
+  const usage = envelope.data.usage;
+  const consumedModelTokens = [
+    usage?.input_tokens,
+    usage?.output_tokens,
+    usage?.thinking_tokens,
+    usage?.total_tokens,
+  ].some((value) => value !== undefined && value > 0);
+  if (consumedModelTokens) {
+    throw new GeminiSourceError(
+      'invalid_response',
+      `Installed Antigravity version consumed model usage while executing ${command} as a read-only command`,
     );
   }
   return envelope.data;

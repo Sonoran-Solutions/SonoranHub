@@ -187,4 +187,52 @@ describe('API Capacity runtime', () => {
     expect(history.statusCode).toBe(200);
     expect(history.json().snapshots[0].provider).toBe('gemini');
   });
+
+  it('persists only semantic upgrade metadata, never the Antigravity upgrade URI', async () => {
+    const config = loadConfig(
+      { NODE_ENV: 'test', LOG_LEVEL: 'silent', SERVICE_NAME: 'sonoran-hub-api' },
+      { defaultServiceName: 'sonoran-hub-api' },
+    );
+    const geminiSource: GeminiCapacitySource = {
+      probe: async () => ({ available: true, antigravityVersion: '1.1.22' }),
+      readCapacity: async () => ({
+        antigravityVersion: '1.1.22',
+        credits: {
+          remaining_credits: 10,
+          upgrade_uri: 'https://example.invalid/upgrade?account_id=secret',
+        },
+      }),
+      close: async () => undefined,
+    };
+    runtime = createCapacityRuntime({
+      environment: { CAPACITY_REFRESH_INTERVAL_MS: '300000' },
+      config,
+      geminiSource,
+      logger: createStructuredLogger({ serviceName: config.serviceName, level: 'silent' }),
+    });
+    await runtime.start();
+    const app = buildApp(config, { capacityService: runtime.service });
+    const current = await app.inject({ method: 'GET', url: '/capacity' });
+    const history = await app.inject({ method: 'GET', url: '/capacity/history?provider=gemini' });
+    await app.close();
+    const serialized = `${current.body}${history.body}`;
+    expect(serialized).not.toContain('upgrade_uri');
+    expect(serialized).not.toContain('account_id');
+    expect(serialized).not.toContain('example.invalid');
+    expect(
+      current
+        .json()
+        .providers.find((provider: { providerId: string }) => provider.providerId === 'gemini'),
+    ).toMatchObject({
+      snapshot: {
+        resources: [
+          {
+            id: 'gemini-g1-credits',
+            remaining: 10,
+            metadata: { upgrade_available: true },
+          },
+        ],
+      },
+    });
+  });
 });

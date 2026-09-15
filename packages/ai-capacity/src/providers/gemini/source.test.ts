@@ -55,6 +55,7 @@ const quotaEnvelope = (
       },
     ],
   },
+  usage: unknown | null = { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
 ) =>
   JSON.stringify({
     conversation_id: '',
@@ -62,7 +63,7 @@ const quotaEnvelope = (
     response: 'ignored',
     duration_seconds: 0,
     num_turns: numTurns,
-    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    ...(usage === null ? {} : { usage }),
     command: { name: 'usage', data },
   });
 
@@ -73,6 +74,16 @@ const creditsEnvelope = JSON.stringify({
   duration_seconds: 0,
   num_turns: 0,
   usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+  command: { name: 'credits', data: { remaining_credits: 2 } },
+});
+
+const creditsEnvelopeWithUsage = JSON.stringify({
+  conversation_id: '',
+  status: 'SUCCESS',
+  response: 'ignored',
+  duration_seconds: 0,
+  num_turns: 0,
+  usage: { input_tokens: 12, output_tokens: 3, total_tokens: 15 },
   command: { name: 'credits', data: { remaining_credits: 2 } },
 });
 
@@ -172,6 +183,92 @@ describe('AntigravityCliSource', () => {
       failure: { code: 'invalid_response' },
     });
     await malformed.source.close();
+  });
+
+  it('uses a structured error to classify a nonzero authentication exit', async () => {
+    const { source } = sourceFor(
+      (args) =>
+        new FakeChild(
+          args[0] === '--version'
+            ? '1.1.22'
+            : JSON.stringify({
+                conversation_id: '',
+                status: 'ERROR',
+                response: 'Please sign in to continue',
+                num_turns: 0,
+              }),
+          args[0] === '--version' ? 0 : 1,
+        ),
+    );
+    await expect(source.probe()).resolves.toMatchObject({
+      available: false,
+      failure: { code: 'authentication' },
+    });
+    await source.close();
+  });
+
+  it('keeps unknown structured failures as provider errors on nonzero exit', async () => {
+    const { source } = sourceFor(
+      (args) =>
+        new FakeChild(
+          args[0] === '--version'
+            ? '1.1.22'
+            : JSON.stringify({
+                conversation_id: '',
+                status: 'ERROR',
+                response: 'The provider is temporarily unavailable',
+                num_turns: 0,
+              }),
+          args[0] === '--version' ? 0 : 1,
+        ),
+    );
+    await expect(source.probe()).resolves.toMatchObject({
+      available: false,
+      failure: { code: 'provider_error' },
+      reason: 'Antigravity CLI rejected /quota (exit 1)',
+    });
+    await source.close();
+  });
+
+  it('accepts absent usage counters but rejects consumed model-token counters', async () => {
+    const absent = sourceFor(
+      (args) =>
+        new FakeChild(args[0] === '--version' ? '1.1.22' : quotaEnvelope(0, undefined, null)),
+    );
+    await expect(absent.source.probe()).resolves.toMatchObject({ available: true });
+    await absent.source.close();
+
+    const quotaConsumed = sourceFor(
+      (args) =>
+        new FakeChild(
+          args[0] === '--version'
+            ? '1.1.22'
+            : quotaEnvelope(0, undefined, { input_tokens: 12, output_tokens: 3, total_tokens: 15 }),
+        ),
+    );
+    await expect(quotaConsumed.source.probe()).resolves.toMatchObject({
+      available: false,
+      failure: { code: 'invalid_response' },
+      reason:
+        'Installed Antigravity version consumed model usage while executing /quota as a read-only command',
+    });
+    await quotaConsumed.source.close();
+
+    const creditsConsumed = sourceFor((args) => {
+      if (args[0] === '--version') return new FakeChild('1.1.22');
+      if (args.includes('/quota')) return new FakeChild(quotaEnvelope());
+      return new FakeChild(creditsEnvelopeWithUsage);
+    });
+    await expect(creditsConsumed.source.probe()).resolves.toMatchObject({ available: true });
+    await expect(creditsConsumed.source.readCapacity()).resolves.toMatchObject({
+      quota: expect.any(Object),
+      creditsError: {
+        code: 'invalid_response',
+        message:
+          'Installed Antigravity version consumed model usage while executing /credits as a read-only command',
+      },
+    });
+    await creditsConsumed.source.close();
   });
 
   it('bounds output and escalates a hung command', async () => {
