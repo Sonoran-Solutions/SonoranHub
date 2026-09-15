@@ -1,4 +1,5 @@
 import type { IncomingMessage } from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
 
 import {
   AGENT_HEARTBEAT_INTERVAL_MS,
@@ -107,24 +108,36 @@ export interface MachineHubOptions {
   readonly agentToken?: string;
   readonly heartbeatIntervalMs?: number;
   readonly staleAfterMs?: number;
-  readonly offlineAfterMs?: number;
+  readonly helloTimeoutMs?: number;
   readonly now?: () => number;
 }
+
+export interface ActiveMachineSession {
+  readonly machineId: string;
+  readonly socket: WebSocket;
+  readonly connectedAt: number;
+  lastHeartbeatReceivedAt: number | undefined;
+  lastSequence: number;
+}
+
+const SESSION_REPLACED_CLOSE_CODE = 4001;
+const SESSION_REPLACED_CLOSE_REASON = 'replaced_by_new_session';
 
 export class MachineHub {
   readonly store: MachineStore;
   readonly heartbeatIntervalMs: number;
   private readonly agentToken?: string;
   private readonly staleAfterMs: number;
-  private readonly offlineAfterMs: number;
+  private readonly helloTimeoutMs: number;
   private readonly now: () => number;
+  private readonly sessions = new Map<string, ActiveMachineSession>();
 
   constructor(options: MachineHubOptions = {}) {
     this.store = options.store ?? new InMemoryMachineStore();
     this.agentToken = options.agentToken;
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? AGENT_HEARTBEAT_INTERVAL_MS;
     this.staleAfterMs = options.staleAfterMs ?? this.heartbeatIntervalMs * 2;
-    this.offlineAfterMs = options.offlineAfterMs ?? this.heartbeatIntervalMs * 4;
+    this.helloTimeoutMs = options.helloTimeoutMs ?? 5_000;
     this.now = options.now ?? Date.now;
   }
 
@@ -132,7 +145,16 @@ export class MachineHub {
     if (!this.agentToken) return false;
     const header = request.headers.authorization;
     const value = Array.isArray(header) ? header[0] : header;
-    return value === `Bearer ${this.agentToken}`;
+    if (value === undefined || !value.startsWith('Bearer ')) return false;
+    return timingSafeStringEqual(value.slice('Bearer '.length), this.agentToken);
+  }
+
+  getActiveSession(machineId: string): ActiveMachineSession | undefined {
+    return this.sessions.get(machineId);
+  }
+
+  get activeSessionCount(): number {
+    return this.sessions.size;
   }
 
   async list(): Promise<ReturnType<typeof machinesResponseSchema.parse>> {
@@ -141,7 +163,7 @@ export class MachineHub {
       machines: records.map((record) =>
         machineSummarySchema.parse({
           ...record,
-          status: this.statusFor(record.lastSeenAt),
+          status: this.statusFor(record.identity.id),
         }),
       ),
     };
@@ -152,9 +174,15 @@ export class MachineHub {
     const state = {
       helloReceived: false,
       machineId: undefined as string | undefined,
-      lastSequence: 0,
+      session: undefined as ActiveMachineSession | undefined,
+      helloTimer: undefined as NodeJS.Timeout | undefined,
     };
     let messageQueue = Promise.resolve();
+    state.helloTimer = setTimeout(() => {
+      if (!state.helloReceived) {
+        this.reject(socket, 'hello_required', 'Agent hello was not received before timeout');
+      }
+    }, this.helloTimeoutMs);
 
     socket.on('message', (data, isBinary) => {
       messageQueue = messageQueue.then(() => this.processMessage(socket, data, isBinary, state));
@@ -162,13 +190,25 @@ export class MachineHub {
         this.reject(socket, 'invalid_message', 'Agent message could not be processed'),
       );
     });
+    socket.on('close', () => {
+      if (state.helloTimer) clearTimeout(state.helloTimer);
+      const session = state.session;
+      if (session && this.sessions.get(session.machineId)?.socket === socket) {
+        this.sessions.delete(session.machineId);
+      }
+    });
   }
 
   private async processMessage(
     socket: WebSocket,
     data: WebSocket.RawData,
     isBinary: boolean,
-    state: { helloReceived: boolean; machineId: string | undefined; lastSequence: number },
+    state: {
+      helloReceived: boolean;
+      machineId: string | undefined;
+      session: ActiveMachineSession | undefined;
+      helloTimer: NodeJS.Timeout | undefined;
+    },
   ): Promise<void> {
     const raw = isBinary ? Buffer.from(data as Buffer) : Buffer.from(data.toString());
     if (raw.byteLength > AGENT_MAX_MESSAGE_BYTES) {
@@ -201,21 +241,38 @@ export class MachineHub {
         this.reject(socket, 'duplicate_hello', 'Agent hello may only be sent once per connection');
         return;
       }
-      state.helloReceived = true;
-      state.machineId = message.machine.id;
+      const records = await this.store.list();
+      const existing = records.find((record) => record.identity.id === message.machine.id);
       const persisted: PersistedMachine = {
         identity: message.machine,
         agentVersion: message.agentVersion,
         capabilities: message.capabilities,
         policyRevision: message.policyRevision,
-        lastSeenAt: new Date(this.now()).toISOString(),
-        telemetry: null,
+        lastSeenAt: existing?.lastSeenAt ?? new Date(this.now()).toISOString(),
+        telemetry: existing?.telemetry ?? null,
       };
       try {
         await this.store.upsert(persisted);
       } catch {
         this.reject(socket, 'invalid_identity', 'Machine could not be persisted');
         return;
+      }
+      const session: ActiveMachineSession = {
+        machineId: message.machine.id,
+        socket,
+        connectedAt: this.now(),
+        lastHeartbeatReceivedAt: undefined,
+        lastSequence: 0,
+      };
+      if (state.helloTimer) clearTimeout(state.helloTimer);
+      state.helloTimer = undefined;
+      const replaced = this.sessions.get(session.machineId);
+      this.sessions.set(session.machineId, session);
+      state.helloReceived = true;
+      state.machineId = session.machineId;
+      state.session = session;
+      if (replaced && replaced.socket !== socket && replaced.socket.readyState === WebSocket.OPEN) {
+        replaced.socket.close(SESSION_REPLACED_CLOSE_CODE, SESSION_REPLACED_CLOSE_REASON);
       }
       this.send(
         socket,
@@ -228,15 +285,16 @@ export class MachineHub {
       );
       return;
     }
-    if (!state.helloReceived || !state.machineId) {
+    if (!state.helloReceived || !state.machineId || !state.session) {
       this.reject(socket, 'hello_required', 'Agent hello is required before heartbeat');
       return;
     }
-    if (message.sequence <= state.lastSequence) {
+    if (message.sequence <= state.session.lastSequence) {
       this.reject(socket, 'non_monotonic_sequence', 'Heartbeat sequence must increase');
       return;
     }
-    state.lastSequence = message.sequence;
+    state.session.lastSequence = message.sequence;
+    state.session.lastHeartbeatReceivedAt = this.now();
     try {
       await this.updateHeartbeat(state.machineId, message);
     } catch {
@@ -258,11 +316,12 @@ export class MachineHub {
     });
   }
 
-  private statusFor(lastSeenAt: string): MachineSummary['status'] {
-    const age = Math.max(0, this.now() - Date.parse(lastSeenAt));
-    if (age <= this.staleAfterMs) return 'ONLINE';
-    if (age <= this.offlineAfterMs) return 'STALE';
-    return 'OFFLINE';
+  private statusFor(machineId: string): MachineSummary['status'] {
+    const session = this.sessions.get(machineId);
+    if (!session) return 'OFFLINE';
+    if (session.lastHeartbeatReceivedAt === undefined) return 'STALE';
+    const age = Math.max(0, this.now() - session.lastHeartbeatReceivedAt);
+    return age <= this.staleAfterMs ? 'ONLINE' : 'STALE';
   }
 
   private reject(
@@ -291,4 +350,11 @@ export class MachineHub {
 
 export function createAgentWebSocketServer(): WebSocketServer {
   return new WebSocketServer({ noServer: true, maxPayload: AGENT_MAX_MESSAGE_BYTES });
+}
+
+function timingSafeStringEqual(left: string, right: string): boolean {
+  const leftBytes = Buffer.from(left, 'utf8');
+  const rightBytes = Buffer.from(right, 'utf8');
+  if (leftBytes.byteLength !== rightBytes.byteLength) return false;
+  return timingSafeEqual(leftBytes, rightBytes);
 }

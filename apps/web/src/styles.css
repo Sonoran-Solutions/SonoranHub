@@ -122,6 +122,28 @@ h1 {
 .home-capacity {
   margin-top: 1rem;
 }
+.home-machines {
+  margin-top: 1rem;
+}
+.home-machine-list {
+  background: #111d31;
+  border: 1px solid #263652;
+  border-radius: 0.85rem;
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding: 1rem;
+}
+.home-machine-row {
+  align-items: center;
+  display: grid;
+  gap: 0.35rem 0.75rem;
+  grid-template-columns: 1fr auto;
+}
+.home-machine-row small {
+  color: #9fb0c7;
+  grid-column: 1 / -1;
+}
 .section-heading,
 .provider-card-heading,
 .resource-heading,

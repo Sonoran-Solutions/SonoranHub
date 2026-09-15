@@ -146,7 +146,10 @@ For the Phase 1A Agent prototype, set the same temporary bearer credential in
 `SONORAN_HUB_URL=ws://127.0.0.1:3000/agent/ws pnpm dev:agent`. The Agent
 creates a stable ID under `~/.sonoran-agent/state`, connects outbound over an
 authenticated WebSocket, and reports CPU, memory, disk, and uptime telemetry.
-It has no remote command or shell capability in this phase.
+It has no remote command or shell capability in this phase. Cleartext `ws://`
+is accepted only for loopback development endpoints; remote Hub connections
+must use `wss://`. A configured Hub URL without `SONORAN_AGENT_TOKEN` fails
+closed.
 
 Shared services validate `NODE_ENV`, `LOG_LEVEL`, and `SERVICE_NAME` through
 `@sonoran-hub/config`. Structured logs carry service and optional correlation
@@ -179,6 +182,8 @@ If those seven things work reliably from an Android phone away from the main PC,
 
 ## Current status
 
-**Planning / foundation.** No production implementation exists yet.
+**Phase 1A foundation implemented.** Agent transport, machine identity,
+basic telemetry, machine state, and the responsive Machines surface are live.
+Remote actions and task execution remain deferred.
 
 Start with [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).

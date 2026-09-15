@@ -46,13 +46,14 @@ Create a boring, testable monorepo and shared contracts before implementing inte
 
 ## Phase 0B — AI Capacity service
 
-### First vertical slice status
+### First vertical slice status — implemented
+
+Implemented providers: OpenRouter, DeepSeek, Codex, and Gemini.
 
 The OpenRouter/DeepSeek Capacity slice is implemented through the coordinator,
 PostgreSQL snapshot persistence, Fastify read API, and responsive React
-dashboard. Codex capacity is now implemented through the official local
-app-server source boundary and the same persistence/API/UI path. Gemini,
-routing policy, forecasting, charts, and Sonoran Agent remain future work.
+dashboard. Codex and Gemini capacity are also implemented through their
+official local source boundaries and the same persistence/API/UI path.
 
 ### Why this comes early
 
@@ -103,10 +104,10 @@ Reference: https://github.com/FAAATQ/DeepSeekBudget
 
 #### Provider 4: Gemini
 
-- Put all collection logic behind a `GeminiCapacitySource` interface.
-- Prefer official structured/headless data when available.
-- If the initial implementation must rely on locally available Antigravity state/CLI behavior, isolate it behind the adapter and mark source confidence/staleness explicitly.
-- Do not make brittle terminal-output parsing a permanent architectural dependency.
+- [x] Put all collection logic behind a `GeminiCapacitySource` interface.
+- [x] Prefer official structured/headless data when available.
+- [x] If the initial implementation must rely on locally available Antigravity state/CLI behavior, isolate it behind the adapter and mark source confidence/staleness explicitly.
+- [x] Do not make brittle terminal-output parsing a permanent architectural dependency.
 
 #### UI
 
@@ -135,35 +136,44 @@ Create an `/capacity` view and compact home cards showing:
 
 Securely establish the remote-control primitive without arbitrary shell exposure.
 
+### Phase 1A status
+
+Implemented: authenticated outbound Agent transport, versioned hello/heartbeat
+contracts, stable machine identity, bounded CPU/RAM/disk/uptime telemetry,
+PostgreSQL machine metadata/latest telemetry persistence, live
+ONLINE/STALE/OFFLINE semantics, and responsive Home/Machines views. Remote
+actions, enrollment UI, repository operations, workers, and task execution
+remain deferred to later phases.
+
 ### Work
 
 #### Agent identity and registration
 
-- Generate a stable Agent/machine ID.
-- Implement enrollment/bootstrap process.
-- Establish an authenticated outbound WebSocket connection.
-- Add protocol version and Agent version to handshake.
-- Add heartbeat and reconnect with jitter/backoff.
+- [x] Generate a stable Agent/machine ID.
+- Enrollment/bootstrap UI remains deferred; Phase 1A uses a temporary machine token outside Git.
+- [x] Establish an authenticated outbound WebSocket connection.
+- [x] Add protocol version and Agent version to handshake.
+- [x] Add heartbeat and reconnect with jitter/backoff.
 
 #### Telemetry
 
 Collect a bounded initial set:
 
-- OS/hostname;
-- uptime;
-- CPU utilization;
-- RAM total/used;
-- disk total/used for configured volumes;
-- GPU summary where a reliable platform adapter exists;
-- selected process/service status.
+- [x] OS/hostname;
+- [x] uptime;
+- [x] CPU utilization;
+- [x] RAM total/used;
+- [x] disk total/used for configured volumes;
+- GPU and process/service summaries remain deferred.
 
 Do not block the phase on perfect cross-platform GPU support.
 
 #### Capability policy
 
-Implement local capabilities before remote actions. Suggested initial groups:
+Phase 1A advertises only the read-only telemetry capability. Broader local
+capabilities remain future work:
 
-- `machine.read.telemetry`
+- [x] `machine.read.telemetry`
 - `process.read`
 - `process.stop.allowed`
 - `service.read`
@@ -176,23 +186,19 @@ Implement local capabilities before remote actions. Suggested initial groups:
 
 The Agent advertises granted capabilities to Hub.
 
-#### Safe actions
+#### Remote actions
 
-Implement two or three proof actions only, for example:
-
-- run configured repository status;
-- restart one explicitly configured development service;
-- stop one explicitly configured non-system process.
-
-Every action produces an audit event.
+Remote actions and their audit events are explicitly deferred. This phase
+does not define an action RPC, arbitrary shell, process/service control, or
+repository operation.
 
 ### Exit criteria
 
 - Agent can remain connected/reconnect for an extended session.
 - Hub correctly distinguishes online/stale/offline.
 - Mobile can view fresh main-PC telemetry.
-- At least one non-destructive remote action works end-to-end.
-- An action not granted by local policy is rejected even if requested by Hub.
+- API restart leaves persisted machines offline until their Agents reconnect.
+- No remote-action protocol is exposed.
 
 ---
 

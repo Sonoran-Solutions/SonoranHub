@@ -97,6 +97,7 @@ export function App() {
 
 function HomePage() {
   const capacity = useCapacity();
+  const machines = useMachines();
   return (
     <main className="content">
       <section className="hero">
@@ -119,7 +120,56 @@ function HomePage() {
         </div>
         <CapacityStateView state={capacity} compact />
       </section>
+      <section aria-labelledby="home-machines-title" className="home-machines">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Trusted hosts</p>
+            <h2 id="home-machines-title">Machines</h2>
+          </div>
+          <a className="text-link" href="/machines">
+            Open full view →
+          </a>
+        </div>
+        <HomeMachineSummary state={machines} />
+      </section>
     </main>
+  );
+}
+
+function HomeMachineSummary({ state }: { state: MachinesState }) {
+  if (state.status === 'loading') return <div className="state-panel">Loading machines…</div>;
+  if (state.status === 'error') {
+    return <div className="state-panel state-error">Machine data is unavailable.</div>;
+  }
+  if (state.data.machines.length === 0) {
+    return <div className="state-panel">No Agent enrolled yet.</div>;
+  }
+  return (
+    <>
+      {state.refreshError ? (
+        <p className="refresh-status" role="status">
+          Showing the last successful machine update. Refresh failed.
+        </p>
+      ) : null}
+      <div className="home-machine-list">
+        {state.data.machines.slice(0, 3).map((machine) => (
+          <div className="home-machine-row" key={machine.identity.id}>
+            <strong>{machine.identity.name}</strong>
+            <span className={`machine-status machine-status-${machine.status.toLowerCase()}`}>
+              {machine.status}
+            </span>
+            <small>
+              CPU {formatPercentValue(machine.telemetry?.cpuPercent)} · RAM{' '}
+              {machine.telemetry?.memoryUsedBytes !== undefined &&
+              machine.telemetry.memoryTotalBytes !== undefined
+                ? `${formatBytes(machine.telemetry.memoryUsedBytes)} / ${formatBytes(machine.telemetry.memoryTotalBytes)}`
+                : 'Unavailable'}{' '}
+              · Seen {formatMachineAge(machine.lastSeenAt)}
+            </small>
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -164,6 +214,11 @@ function MachinesPage() {
           No Agent is connected yet. Start the Agent with SONORAN_HUB_URL and SONORAN_AGENT_TOKEN
           configured.
         </div>
+      ) : null}
+      {state.status === 'success' && state.refreshError ? (
+        <p className="refresh-status" role="status">
+          Showing the last successful machine update. Refresh failed: {state.refreshError}
+        </p>
       ) : null}
       {state.status === 'success' ? (
         <section className="machine-grid">
@@ -474,25 +529,41 @@ function useCapacity(): CapacityState {
 type MachinesState =
   | { status: 'loading' }
   | { status: 'error'; message: string; data?: undefined }
-  | { status: 'success'; data: MachinesResponse };
+  | { status: 'success'; data: MachinesResponse; refreshing: boolean; refreshError?: string };
 
 function useMachines(): MachinesState {
   const [state, setState] = useState<MachinesState>({ status: 'loading' });
   useEffect(() => {
     let stopped = false;
     let timer: number | undefined;
+    let controller: AbortController | undefined;
+    let previousData: MachinesResponse | undefined;
     const load = async () => {
+      if (stopped) return;
+      controller?.abort();
+      controller = new AbortController();
+      if (previousData) setState({ status: 'success', data: previousData, refreshing: true });
       try {
-        const response = await fetch(`${apiBaseUrl}/machines`);
+        const response = await fetch(`${apiBaseUrl}/machines`, { signal: controller.signal });
         if (!response.ok) throw new Error('The Hub API did not return machine data.');
         const data = (await response.json()) as MachinesResponse;
-        if (!stopped) setState({ status: 'success', data });
+        previousData = data;
+        if (!stopped) setState({ status: 'success', data, refreshing: false });
       } catch (error) {
-        if (!stopped)
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        if (!stopped && previousData) {
+          setState({
+            status: 'success',
+            data: previousData,
+            refreshing: false,
+            refreshError: error instanceof Error ? error.message : 'Request failed',
+          });
+        } else if (!stopped) {
           setState({
             status: 'error',
             message: error instanceof Error ? error.message : 'Request failed',
           });
+        }
       } finally {
         if (!stopped) timer = window.setTimeout(() => void load(), 5_000);
       }
@@ -500,6 +571,7 @@ function useMachines(): MachinesState {
     void load();
     return () => {
       stopped = true;
+      controller?.abort();
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, []);
