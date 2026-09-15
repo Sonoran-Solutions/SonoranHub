@@ -1,20 +1,30 @@
 import { buildApp } from './app.js';
 import { createCapacityRuntime } from './capacity.js';
 import { parseAllowedOrigins } from './cors.js';
+import { PostgresMachineStore } from './machines.js';
 import { createStructuredLogger, loadConfig } from '@sonoran-hub/config';
+import pg from 'pg';
+
+const { Pool } = pg;
 
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? '127.0.0.1';
 const config = loadConfig(process.env, { defaultServiceName: 'sonoran-hub-api' });
 const logger = createStructuredLogger({ serviceName: config.serviceName, level: config.logLevel });
 const capacity = createCapacityRuntime({ environment: process.env, config, logger });
+const machinePool = process.env.DATABASE_URL?.trim()
+  ? new Pool({ connectionString: process.env.DATABASE_URL })
+  : undefined;
 const app = buildApp(config, {
   capacityService: capacity.service,
   allowedOrigins: parseAllowedOrigins(process.env.WEB_ORIGIN),
+  machineStore: machinePool ? new PostgresMachineStore(machinePool) : undefined,
+  agentToken: process.env.SONORAN_AGENT_TOKEN,
 });
 
 app.addHook('onClose', async () => {
   await capacity.stop();
+  await machinePool?.end();
 });
 
 try {
@@ -23,5 +33,6 @@ try {
 } catch {
   logger.error('api.start_failed', { metadata: { error: 'API startup failed' } });
   await capacity.stop();
+  await machinePool?.end();
   process.exitCode = 1;
 }

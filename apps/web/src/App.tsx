@@ -4,6 +4,8 @@ import type {
   CapacityCurrentProvider,
   CapacityCurrentResponse,
   CapacityResource,
+  MachineSummary,
+  MachinesResponse,
 } from '@sonoran-hub/contracts';
 
 import {
@@ -32,7 +34,7 @@ const sections = [
   { label: 'Dashboard', href: '/' },
   { label: 'AI Capacity', href: '/capacity' },
   { label: 'Projects', href: '/#Projects' },
-  { label: 'Machines', href: '/#Machines' },
+  { label: 'Machines', href: '/machines' },
   { label: 'Tasks', href: '/#Tasks' },
 ];
 
@@ -64,7 +66,7 @@ export function App() {
           <p className="eyebrow">Sonoran Solutions</p>
           <h1>Sonoran Hub</h1>
         </div>
-        <span className="status-pill">Capacity live slice</span>
+        <span className="status-pill">Agent foundation live</span>
       </header>
 
       <div className="workspace">
@@ -81,7 +83,13 @@ export function App() {
           ))}
         </nav>
 
-        {path === '/capacity' ? <CapacityPage /> : <HomePage />}
+        {path === '/capacity' ? (
+          <CapacityPage />
+        ) : path === '/machines' ? (
+          <MachinesPage />
+        ) : (
+          <HomePage />
+        )}
       </div>
     </div>
   );
@@ -129,6 +137,103 @@ function CapacityPage() {
       </section>
       <CapacityStateView state={capacity} />
     </main>
+  );
+}
+
+function MachinesPage() {
+  const state = useMachines();
+  return (
+    <main className="content">
+      <section className="page-heading">
+        <div>
+          <p className="eyebrow">Trusted hosts</p>
+          <h2>Machines</h2>
+          <p>Live state and bounded telemetry from outbound Sonoran Agents.</p>
+        </div>
+        <span className="updated">Refreshes every 5s</span>
+      </section>
+      {state.status === 'loading' ? <div className="state-panel">Loading machines…</div> : null}
+      {state.status === 'error' ? (
+        <div className="state-panel state-error" role="alert">
+          <strong>Machine API unavailable</strong>
+          <span>{state.message}</span>
+        </div>
+      ) : null}
+      {state.status === 'success' && state.data.machines.length === 0 ? (
+        <div className="state-panel">
+          No Agent is connected yet. Start the Agent with SONORAN_HUB_URL and SONORAN_AGENT_TOKEN
+          configured.
+        </div>
+      ) : null}
+      {state.status === 'success' ? (
+        <section className="machine-grid">
+          {state.data.machines.map((machine) => (
+            <MachineCard key={machine.identity.id} machine={machine} />
+          ))}
+        </section>
+      ) : null}
+    </main>
+  );
+}
+
+function MachineCard({ machine }: { machine: MachineSummary }) {
+  const memory =
+    machine.telemetry?.memoryTotalBytes !== undefined
+      ? `${formatBytes(machine.telemetry.memoryUsedBytes ?? 0)} / ${formatBytes(machine.telemetry.memoryTotalBytes)}`
+      : 'Unavailable';
+  const rootDisk =
+    machine.telemetry?.disks.find((disk) => disk.id === '/') ?? machine.telemetry?.disks[0];
+  return (
+    <article className="machine-card">
+      <div className="machine-heading">
+        <div>
+          <p className="eyebrow">Machine</p>
+          <h3>{machine.identity.name}</h3>
+          <span className="machine-platform">
+            {machine.identity.platform} · {machine.identity.arch}
+          </span>
+        </div>
+        <span className={`machine-status machine-status-${machine.status.toLowerCase()}`}>
+          {machine.status}
+        </span>
+      </div>
+      <div className="machine-meta">
+        <div>
+          <span>Agent</span>
+          <strong>{machine.agentVersion}</strong>
+        </div>
+        <div>
+          <span>Last seen</span>
+          <strong>{formatMachineAge(machine.lastSeenAt)}</strong>
+        </div>
+        <div>
+          <span>CPU</span>
+          <strong>{formatPercentValue(machine.telemetry?.cpuPercent)}</strong>
+        </div>
+        <div>
+          <span>RAM</span>
+          <strong>{memory}</strong>
+        </div>
+        <div>
+          <span>Disk {rootDisk?.id ?? '/'}</span>
+          <strong>
+            {rootDisk
+              ? `${formatBytes(rootDisk.usedBytes)} / ${formatBytes(rootDisk.totalBytes)}`
+              : 'Unavailable'}
+          </strong>
+        </div>
+        <div>
+          <span>Uptime</span>
+          <strong>{formatUptime(machine.telemetry?.uptimeSeconds)}</strong>
+        </div>
+      </div>
+      <div className="machine-footer">
+        <span>
+          {machine.capabilities.length} capability{machine.capabilities.length === 1 ? '' : 'ies'}
+        </span>
+        <span>{machine.identity.id}</span>
+      </div>
+    </article>
   );
 }
 
@@ -366,6 +471,41 @@ function useCapacity(): CapacityState {
   return state;
 }
 
+type MachinesState =
+  | { status: 'loading' }
+  | { status: 'error'; message: string; data?: undefined }
+  | { status: 'success'; data: MachinesResponse };
+
+function useMachines(): MachinesState {
+  const [state, setState] = useState<MachinesState>({ status: 'loading' });
+  useEffect(() => {
+    let stopped = false;
+    let timer: number | undefined;
+    const load = async () => {
+      try {
+        const response = await fetch(`${apiBaseUrl}/machines`);
+        if (!response.ok) throw new Error('The Hub API did not return machine data.');
+        const data = (await response.json()) as MachinesResponse;
+        if (!stopped) setState({ status: 'success', data });
+      } catch (error) {
+        if (!stopped)
+          setState({
+            status: 'error',
+            message: error instanceof Error ? error.message : 'Request failed',
+          });
+      } finally {
+        if (!stopped) timer = window.setTimeout(() => void load(), 5_000);
+      }
+    };
+    void load();
+    return () => {
+      stopped = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, []);
+  return state;
+}
+
 async function fetchCapacity(signal: AbortSignal): Promise<CapacityCurrentResponse> {
   const response = await fetch(`${apiBaseUrl}/capacity`, { signal });
   if (!response.ok) {
@@ -381,4 +521,27 @@ function useCurrentTime(): number {
     return () => window.clearInterval(timer);
   }, []);
   return now;
+}
+
+function formatBytes(value: number): string {
+  const gigabytes = value / 1_000_000_000;
+  return `${gigabytes >= 10 ? gigabytes.toFixed(1) : gigabytes.toFixed(2)} GB`;
+}
+
+function formatPercentValue(value: number | undefined): string {
+  return value === undefined ? 'Unavailable' : `${value.toFixed(0)}%`;
+}
+
+function formatUptime(seconds: number | undefined): string {
+  if (seconds === undefined) return 'Unavailable';
+  const days = Math.floor(seconds / 86_400);
+  const hours = Math.floor((seconds % 86_400) / 3_600);
+  return days > 0 ? `${days}d ${hours}h` : `${hours}h ${Math.floor((seconds % 3_600) / 60)}m`;
+}
+
+function formatMachineAge(value: string): string {
+  const seconds = Math.max(0, Math.round((Date.now() - Date.parse(value)) / 1_000));
+  if (seconds < 10) return 'just now';
+  if (seconds < 60) return `${seconds}s ago`;
+  return `${Math.floor(seconds / 60)}m ago`;
 }

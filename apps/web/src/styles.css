@@ -159,6 +159,72 @@ h1 {
   gap: 1rem;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
+.machine-grid {
+  display: grid;
+  gap: 1rem;
+}
+.machine-card {
+  background: #111d31;
+  border: 1px solid #263652;
+  border-radius: 0.85rem;
+  padding: 1.25rem;
+}
+.machine-heading {
+  align-items: flex-start;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+.machine-heading h3 {
+  font-size: clamp(1.35rem, 3vw, 1.7rem);
+  margin: 0 0 0.25rem;
+}
+.machine-platform,
+.machine-meta span,
+.machine-footer {
+  color: #9fb0c7;
+  font-size: 0.85rem;
+}
+.machine-status {
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 800;
+  padding: 0.35rem 0.6rem;
+}
+.machine-status-online {
+  background: #12352f;
+  color: #86efac;
+}
+.machine-status-stale {
+  background: #3a2c15;
+  color: #fcd34d;
+}
+.machine-status-offline {
+  background: #3b1d28;
+  color: #fda4af;
+}
+.machine-meta {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 1.5rem;
+}
+.machine-meta div {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+.machine-meta strong {
+  overflow-wrap: anywhere;
+}
+.machine-footer {
+  border-top: 1px solid #263652;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-top: 1.25rem;
+  padding-top: 0.85rem;
+}
 .compact-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   margin-top: 1rem;
@@ -376,6 +442,9 @@ h1 {
   .compact-grid {
     grid-template-columns: 1fr;
   }
+  .machine-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 480px) {
@@ -403,5 +472,10 @@ h1 {
   }
   .resource-tags {
     justify-content: flex-start;
+  }
+  .machine-heading,
+  .machine-footer {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

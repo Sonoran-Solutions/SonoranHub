@@ -118,12 +118,13 @@ Run the applications independently during development:
 ```bash
 pnpm dev:web    # Vite development server
 pnpm dev:api    # Fastify API on http://127.0.0.1:3000
-pnpm dev:agent  # startup-only Sonoran Agent process
+pnpm dev:agent  # Sonoran Agent process
 ```
 
-The API exposes `GET /health`, `GET /capacity`, and bounded
+The API exposes `GET /health`, `GET /machines`, `GET /capacity`, and bounded
 `GET /capacity/history?provider=&since=&limit=`. Open
-`http://127.0.0.1:5173/capacity` for the responsive Capacity dashboard. The
+`http://127.0.0.1:5173/capacity` for the responsive Capacity dashboard or
+`http://127.0.0.1:5173/machines` for connected Agent telemetry. The
 provider refresh default is every 60 seconds and can be changed with
 `CAPACITY_REFRESH_INTERVAL_MS`. The browser polls the Hub API every 15 seconds
 for persisted snapshots; it never calls Codex, Gemini, DeepSeek, or OpenRouter directly.
@@ -139,6 +140,13 @@ prompt or performs login/logout. The
 API allows browser requests from the
 comma-separated origins in `WEB_ORIGIN`; by default this includes both
 `http://127.0.0.1:5173` and `http://localhost:5173`.
+
+For the Phase 1A Agent prototype, set the same temporary bearer credential in
+`SONORAN_AGENT_TOKEN` for the API and Agent, then start the Agent with
+`SONORAN_HUB_URL=ws://127.0.0.1:3000/agent/ws pnpm dev:agent`. The Agent
+creates a stable ID under `~/.sonoran-agent/state`, connects outbound over an
+authenticated WebSocket, and reports CPU, memory, disk, and uptime telemetry.
+It has no remote command or shell capability in this phase.
 
 Shared services validate `NODE_ENV`, `LOG_LEVEL`, and `SERVICE_NAME` through
 `@sonoran-hub/config`. Structured logs carry service and optional correlation

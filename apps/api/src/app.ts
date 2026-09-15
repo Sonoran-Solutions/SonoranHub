@@ -1,3 +1,5 @@
+import { type IncomingMessage } from 'node:http';
+import { type Socket } from 'node:net';
 import Fastify, { type FastifyInstance } from 'fastify';
 
 import {
@@ -13,6 +15,7 @@ import {
   capacityTimestampSchema,
   serviceHealthSchema,
   type CapacitySnapshot,
+  machinesResponseSchema,
 } from '@sonoran-hub/contracts';
 
 import {
@@ -22,10 +25,14 @@ import {
 } from '@sonoran-hub/ai-capacity';
 
 import { DEFAULT_WEB_ORIGINS } from './cors.js';
+import { createAgentWebSocketServer, MachineHub, type MachineStore } from './machines.js';
 
 export interface BuildAppOptions {
   readonly capacityService?: CapacityService;
   readonly allowedOrigins?: readonly string[];
+  readonly machineStore?: MachineStore;
+  readonly agentToken?: string;
+  readonly machineHub?: MachineHub;
 }
 
 export function buildApp(
@@ -44,6 +51,10 @@ export function buildApp(
     },
   });
   const allowedOrigins = new Set(options.allowedOrigins ?? DEFAULT_WEB_ORIGINS);
+  const machineHub =
+    options.machineHub ??
+    new MachineHub({ store: options.machineStore, agentToken: options.agentToken });
+  const agentWebSocketServer = createAgentWebSocketServer();
 
   app.addHook('onRequest', (request, reply, done) => {
     reply.header('x-request-id', request.id);
@@ -62,6 +73,15 @@ export function buildApp(
       status: 'ok',
       service: 'sonoran-hub-api',
     });
+  });
+
+  app.get('/machines', async (_request, reply) => {
+    try {
+      return machinesResponseSchema.parse(await machineHub.list());
+    } catch {
+      reply.code(503);
+      return { error: { code: 'machines_unavailable', message: 'Machine data is unavailable' } };
+    }
   });
 
   app.get('/capacity', async (_request, reply) => {
@@ -134,6 +154,31 @@ export function buildApp(
       }
     },
   );
+
+  const upgradeHandler = (request: IncomingMessage, socket: Socket, head: Buffer) => {
+    let pathname: string;
+    try {
+      pathname = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`)
+        .pathname;
+    } catch {
+      socket.destroy();
+      return;
+    }
+    if (pathname !== '/agent/ws') return;
+    if (!machineHub.authenticate(request)) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    agentWebSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
+      machineHub.handleSocket(webSocket);
+    });
+  };
+  app.server.on('upgrade', upgradeHandler);
+  app.addHook('onClose', async () => {
+    app.server.off('upgrade', upgradeHandler);
+    await new Promise<void>((resolve) => agentWebSocketServer.close(() => resolve()));
+  });
 
   return app;
 }
