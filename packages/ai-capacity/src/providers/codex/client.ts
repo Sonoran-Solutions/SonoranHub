@@ -304,12 +304,20 @@ export class CodexAppServerClient {
     }
     await this.waitForExit(this.shutdownTimeoutMs);
     if (!this.processExited) {
-      child.kill('SIGTERM');
+      this.kill(child, 'SIGTERM');
       await this.waitForExit(this.shutdownTimeoutMs);
     }
     if (!this.processExited) {
-      child.kill('SIGKILL');
+      this.kill(child, 'SIGKILL');
       await this.waitForExit(this.shutdownTimeoutMs);
+    }
+  }
+
+  private kill(child: CodexChildProcess, signal: NodeJS.Signals): void {
+    try {
+      child.kill(signal);
+    } catch {
+      // Continue to the next escalation stage if a child has already closed.
     }
   }
 
@@ -444,11 +452,10 @@ export class CodexAppServerClient {
     }
     this.closed = true;
     this.rejectPending(error);
-    try {
-      this.child?.kill('SIGTERM');
-    } catch {
-      // There is no useful recovery action if the child is already gone.
-    }
+    // Failures are terminal for this client, but cleanup must continue even
+    // when the request caller does not explicitly close it. `close()` owns a
+    // single escalation state machine and remains safe to call while it runs.
+    void this.close();
   }
 
   private rejectPending(error: CodexAppServerClientError): void {

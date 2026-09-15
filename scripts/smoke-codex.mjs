@@ -37,6 +37,7 @@ function sanitizedMetadata(metadata) {
     'normal_model_slug',
     'plan_type',
     'codex_version',
+    'is_main_bucket',
     'window_role',
     'window_duration_mins',
     'ordinary_usage_allowed',

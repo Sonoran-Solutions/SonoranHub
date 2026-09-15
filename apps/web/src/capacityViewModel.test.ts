@@ -152,7 +152,12 @@ describe('capacity presentation helpers', () => {
       unit: 'percent',
       remaining: 63,
       remainingPercent: 63,
-      metadata: { limit_id: 'codex', window_role: 'primary', plan_type: 'plus' },
+      metadata: {
+        limit_id: 'codex',
+        is_main_bucket: true,
+        window_role: 'primary',
+        plan_type: 'plus',
+      },
     };
     const mainSecondary: CapacityResource = {
       ...mainPrimary,
@@ -161,7 +166,12 @@ describe('capacity presentation helpers', () => {
       name: 'Weekly quota',
       remaining: 81,
       remainingPercent: 81,
-      metadata: { limit_id: 'codex', window_role: 'secondary', plan_type: 'plus' },
+      metadata: {
+        limit_id: 'codex',
+        is_main_bucket: true,
+        window_role: 'secondary',
+        plan_type: 'plus',
+      },
     };
     const additional: CapacityResource = {
       ...mainPrimary,
@@ -175,11 +185,57 @@ describe('capacity presentation helpers', () => {
       mainSecondary,
     ]);
     expect(codexPlanLabel([mainPrimary])).toBe('PLUS');
-    expect(providerSummaryStatus([{ ...mainPrimary, status: 'critical' }], false)).toBe('partial');
+    expect(
+      providerSummaryStatus([{ ...mainPrimary, status: 'critical', freshness: 'fresh' }], false),
+    ).toBe('available');
+    expect(
+      providerSummaryStatus([{ ...mainPrimary, status: 'exhausted', freshness: 'fresh' }], false),
+    ).toBe('available');
+    expect(providerSummaryStatus([{ ...mainPrimary, status: 'unknown' }], false)).toBe('partial');
+    expect(
+      providerSummaryStatus(
+        [
+          {
+            ...mainPrimary,
+            status: 'available',
+            error: { code: 'provider_error', message: 'failed' },
+          },
+        ],
+        false,
+      ),
+    ).toBe('partial');
     expect(resourceStatusLabel({ ...mainPrimary, status: 'exhausted' })).toBe('exhausted');
     expect(resourceStatusLabel({ ...mainPrimary, status: 'available', freshness: 'stale' })).toBe(
       'available',
     );
+  });
+
+  it('selects compact Codex quotas by semantic main-bucket metadata', () => {
+    const semanticMain: CapacityResource = {
+      ...base,
+      id: 'codex-default-bucket-primary',
+      provider: 'codex',
+      kind: 'rolling_quota',
+      name: '5-hour quota',
+      unit: 'percent',
+      remaining: 63,
+      remainingPercent: 63,
+      metadata: { limit_id: 'default-bucket', is_main_bucket: true, window_role: 'primary' },
+    };
+    const semanticSecondary: CapacityResource = {
+      ...semanticMain,
+      id: 'codex-default-bucket-secondary',
+      kind: 'weekly_quota',
+      metadata: { limit_id: 'default-bucket', is_main_bucket: true, window_role: 'secondary' },
+    };
+    const literalIdButAdditional: CapacityResource = {
+      ...semanticMain,
+      id: 'codex-codex-primary',
+      metadata: { limit_id: 'codex', window_role: 'primary' },
+    };
+    expect(
+      codexMainQuotaResources([literalIdButAdditional, semanticSecondary, semanticMain]),
+    ).toEqual([semanticMain, semanticSecondary]);
   });
 
   it('formats Codex reset countdowns and keeps the exact timestamp in detail', () => {

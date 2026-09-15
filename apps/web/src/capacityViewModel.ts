@@ -271,12 +271,7 @@ export function providerSummaryStatus(
   if (unavailable) {
     return 'unavailable';
   }
-  return resources.some(
-    (resource) =>
-      !isSemanticallyKnownResource(resource) ||
-      resource.status === 'critical' ||
-      resource.status === 'exhausted',
-  )
+  return resources.some((resource) => !isSemanticallyKnownResource(resource))
     ? 'partial'
     : 'available';
 }
@@ -299,7 +294,7 @@ export function codexMainQuotaResources(
       (resource) =>
         resource.provider === 'codex' &&
         (resource.kind === 'rolling_quota' || resource.kind === 'weekly_quota') &&
-        resource.metadata?.limit_id === 'codex' &&
+        resource.metadata?.is_main_bucket === true &&
         (resource.metadata.window_role === 'primary' ||
           resource.metadata.window_role === 'secondary'),
     )

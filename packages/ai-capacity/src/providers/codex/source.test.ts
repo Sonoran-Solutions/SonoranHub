@@ -1,8 +1,8 @@
 import { EventEmitter } from 'node:events';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { type CodexSpawn } from './client.js';
+import { type CodexChildProcess, type CodexSpawn } from './client.js';
 import { CodexAppServerSource } from './source.js';
 
 class Stream extends EventEmitter {}
@@ -60,6 +60,76 @@ class ProtocolChild extends EventEmitter {
   }
 }
 
+class RecoveryChild extends EventEmitter implements CodexChildProcess {
+  readonly stdout = new Stream();
+  readonly stderr = new Stream();
+  readonly writes: Array<Record<string, unknown>> = [];
+  readonly killedWith: NodeJS.Signals[] = [];
+  isAlive = true;
+  private ended = false;
+
+  readonly stdin = {
+    write: (data: string) => {
+      const message = JSON.parse(data) as Record<string, unknown>;
+      this.writes.push(message);
+      queueMicrotask(() => this.respond(message));
+      return true;
+    },
+    end: () => {
+      this.ended = true;
+      if (this.mode === 'healthy') {
+        queueMicrotask(() => this.exit(0, null));
+      }
+    },
+  };
+
+  constructor(private readonly mode: 'hung' | 'healthy') {
+    super();
+  }
+
+  kill(signal: NodeJS.Signals = 'SIGTERM'): boolean {
+    this.killedWith.push(signal);
+    if (signal === 'SIGKILL') {
+      queueMicrotask(() => this.exit(null, signal));
+    }
+    return true;
+  }
+
+  private respond(message: Record<string, unknown>): void {
+    if (!this.isAlive || typeof message.id !== 'string') return;
+    let result: unknown;
+    if (message.method === 'initialize') {
+      result = {
+        userAgent: 'codex_cli_rs/0.154.0-alpha.6.2',
+        platformFamily: 'unix',
+        platformOs: 'linux',
+        codexHome: '/redacted/codex-home',
+      };
+    } else if (message.method === 'account/read') {
+      result = chatgptAccount;
+    } else if (message.method === 'account/rateLimits/read' && this.mode === 'healthy') {
+      result = {
+        rateLimits: {
+          limitId: 'codex',
+          planType: 'plus',
+          primary: { usedPercent: 10, windowDurationMins: 300, resetsAt: null },
+          secondary: null,
+        },
+        ordinaryUsageAllowed: true,
+      };
+    } else {
+      return;
+    }
+    this.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', id: message.id, result })}\n`);
+  }
+
+  private exit(code: number | null, signal: NodeJS.Signals | null): void {
+    if (!this.isAlive) return;
+    this.isAlive = false;
+    this.emit('exit', code, signal);
+  }
+}
+
 function sourceFor(account: unknown, children: ProtocolChild[] = []) {
   const spawnProcess: CodexSpawn = vi.fn(() => {
     const child = new ProtocolChild(account);
@@ -84,6 +154,10 @@ const chatgptAccount = {
   requiresOpenaiAuth: true,
   account: { type: 'chatgpt', email: 'private@example.test', planType: 'plus' },
 };
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('CodexAppServerSource', () => {
   it('performs initialize, waits for the response, sends initialized, then reads account and quota', async () => {
@@ -173,5 +247,50 @@ describe('CodexAppServerSource', () => {
     await expect(source.probe()).resolves.toMatchObject({ available: true });
     await source.close();
     expect(spawnProcess).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits for failed-client cleanup before starting exactly one replacement', async () => {
+    vi.useFakeTimers();
+    const children: RecoveryChild[] = [];
+    let spawnIndex = 0;
+    const spawnProcess: CodexSpawn = vi.fn(() => {
+      const child = new RecoveryChild(spawnIndex++ === 0 ? 'hung' : 'healthy');
+      children.push(child);
+      queueMicrotask(() => child.emit('spawn'));
+      return child;
+    });
+    const source = new CodexAppServerSource({
+      executable: 'codex-test',
+      startupTimeoutMs: 100,
+      initializeTimeoutMs: 100,
+      requestTimeoutMs: 10,
+      shutdownTimeoutMs: 5,
+      spawnProcess,
+    });
+
+    const firstProbe = source.probe();
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(firstProbe).resolves.toMatchObject({ available: true });
+
+    const failedRead = source.readCapacity();
+    const failure = expect(failedRead).rejects.toMatchObject({ code: 'timeout' });
+    await vi.advanceTimersByTimeAsync(10);
+    await failure;
+    expect(spawnProcess).toHaveBeenCalledTimes(1);
+
+    const nextProbe = source.probe();
+    expect(spawnProcess).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5);
+    expect(children[0]?.killedWith).toEqual(['SIGTERM']);
+    await vi.advanceTimersByTimeAsync(5);
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(nextProbe).resolves.toMatchObject({ available: true });
+
+    expect(spawnProcess).toHaveBeenCalledTimes(2);
+    expect(children[0]?.isAlive).toBe(false);
+    expect(children[1]?.isAlive).toBe(true);
+    const close = source.close();
+    await vi.advanceTimersByTimeAsync(0);
+    await close;
   });
 });

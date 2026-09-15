@@ -49,6 +49,7 @@ describe('Codex normalization', () => {
           remaining: 63,
           remainingPercent: 63,
           resetAt: '2027-01-15T08:00:00.000Z',
+          metadata: expect.objectContaining({ is_main_bucket: true }),
         }),
         expect.objectContaining({
           id: 'codex-codex-secondary',
@@ -91,6 +92,30 @@ describe('Codex normalization', () => {
       name: 'Reserve / Luna · 1-hour quota',
       metadata: { limit_id: 'reserve/luna' },
     });
+    expect(resources[2]?.metadata).not.toHaveProperty('is_main_bucket');
+  });
+
+  it('marks the first useful non-codex bucket as the semantic main bucket', () => {
+    const resources = normalizeCodexRateLimits(
+      sourceSnapshot({
+        rateLimits: mainBucket({
+          limitId: 'default-bucket',
+          limitName: 'Default bucket',
+        }),
+      }),
+      collectedAt,
+    );
+    expect(resources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'codex-default-bucket-primary',
+          metadata: expect.objectContaining({
+            limit_id: 'default-bucket',
+            is_main_bucket: true,
+          }),
+        }),
+      ]),
+    );
   });
 
   it('preserves a missing reset timestamp as absent', () => {

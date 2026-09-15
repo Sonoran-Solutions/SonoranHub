@@ -139,6 +139,8 @@ export class CodexAppServerSource implements CodexCapacitySource {
         response: CodexInitializeResponse;
       }>
     | undefined;
+  private cleanup: Promise<void> | undefined;
+  private lifecycle = 0;
   private account: CodexAccountResponse | undefined;
 
   constructor(options: CodexAppServerSourceOptions = {}) {
@@ -216,11 +218,14 @@ export class CodexAppServerSource implements CodexCapacitySource {
   }
 
   async close(): Promise<void> {
+    this.lifecycle += 1;
     const client = this.client;
+    const cleanup = this.cleanup;
     this.client = undefined;
     this.account = undefined;
+    this.readyRecord = undefined;
     this.initialization = undefined;
-    await client?.close();
+    await Promise.all([client?.close(), cleanup]);
   }
 
   private async readAccount(client: CodexAppServerClient): Promise<CodexAccountResponse> {
@@ -258,6 +263,45 @@ export class CodexAppServerSource implements CodexCapacitySource {
       return this.initialization;
     }
 
+    const cleanup = this.retireClosedClient();
+    const initialization = this.initializeAfterCleanup(cleanup, this.lifecycle);
+    this.initialization = initialization;
+    try {
+      return await initialization;
+    } catch (error) {
+      throw sourceFailure(error, 'Codex app-server initialization failed');
+    } finally {
+      this.initialization = undefined;
+    }
+  }
+
+  private retireClosedClient(): Promise<void> | undefined {
+    if (!this.client?.isClosed) {
+      return this.cleanup;
+    }
+    const client = this.client;
+    this.client = undefined;
+    this.account = undefined;
+    this.readyRecord = undefined;
+    this.cleanup = client.close();
+    return this.cleanup;
+  }
+
+  private async initializeAfterCleanup(
+    cleanup: Promise<void> | undefined,
+    lifecycle: number,
+  ): Promise<{
+    client: CodexAppServerClient;
+    response: CodexInitializeResponse;
+  }> {
+    await cleanup;
+    if (this.cleanup === cleanup) {
+      this.cleanup = undefined;
+    }
+    if (lifecycle !== this.lifecycle) {
+      throw new CodexSourceError('unavailable', 'Codex app-server source was closed');
+    }
+
     const client = new CodexAppServerClient({
       executable: this.executable,
       startupTimeoutMs: this.startupTimeoutMs,
@@ -275,18 +319,16 @@ export class CodexAppServerSource implements CodexCapacitySource {
       },
     } satisfies CodexAppServerClientOptions);
     this.client = client;
-    this.initialization = this.initializeClient(client);
     try {
-      return await this.initialization;
+      return await this.initializeClient(client);
     } catch (error) {
       await client.close();
       if (this.client === client) {
         this.client = undefined;
         this.account = undefined;
+        this.readyRecord = undefined;
       }
       throw sourceFailure(error, 'Codex app-server initialization failed');
-    } finally {
-      this.initialization = undefined;
     }
   }
 

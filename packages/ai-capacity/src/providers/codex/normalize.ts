@@ -119,6 +119,7 @@ function metadataForBucket(
   snapshot: SourceRateLimitSnapshot,
   role?: 'primary' | 'secondary',
   durationMinutes?: number | null,
+  isMain = false,
 ): Record<string, unknown> {
   const metadata: Record<string, unknown> = {
     limit_id: limitId,
@@ -145,6 +146,7 @@ function metadataForBucket(
   if (durationMinutes !== undefined && durationMinutes !== null) {
     metadata.window_duration_mins = durationMinutes;
   }
+  if (isMain) metadata.is_main_bucket = true;
   return metadata;
 }
 
@@ -162,7 +164,7 @@ function windowResource(
   const quotaLabel = formatCodexQuotaWindowLabel(durationMinutes);
   const bucketLabel = boundedString(bucket.limitName) ?? boundedString(bucket.limitId) ?? limitId;
   const name = isMain ? quotaLabel : `${bucketLabel} · ${quotaLabel}`;
-  const metadata = metadataForBucket(bucket, limitId, snapshot, role, durationMinutes);
+  const metadata = metadataForBucket(bucket, limitId, snapshot, role, durationMinutes, isMain);
   return {
     id: `codex-${sanitizeCodexLimitId(limitId)}-${role}`,
     provider: CODEX_PROVIDER_ID,

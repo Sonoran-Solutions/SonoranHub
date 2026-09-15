@@ -10,9 +10,12 @@ class FakeChild extends EventEmitter implements CodexChildProcess {
   readonly stdout = new FakeStream();
   readonly stderr = new FakeStream();
   readonly writes: string[] = [];
-  killedWith: NodeJS.Signals | undefined;
+  readonly killedWith: NodeJS.Signals[] = [];
   ended = false;
-  constructor(private readonly autoExit = true) {
+  constructor(
+    private readonly exitOnEnd = true,
+    private readonly exitOnSigkill = false,
+  ) {
     super();
   }
   readonly stdin = {
@@ -22,15 +25,15 @@ class FakeChild extends EventEmitter implements CodexChildProcess {
     },
     end: () => {
       this.ended = true;
-      if (this.autoExit) {
+      if (this.exitOnEnd) {
         queueMicrotask(() => this.emit('exit', 0, null));
       }
     },
   };
 
   kill(signal: NodeJS.Signals = 'SIGTERM'): boolean {
-    this.killedWith = signal;
-    if (this.autoExit) {
+    this.killedWith.push(signal);
+    if (this.exitOnEnd || (signal === 'SIGKILL' && this.exitOnSigkill)) {
       queueMicrotask(() => this.emit('exit', null, signal));
     }
     return true;
@@ -123,7 +126,7 @@ describe('CodexAppServerClient', () => {
     await nextTick();
     malformedChild.stdout.emit('data', '{not-json}\n');
     await expect(malformed).rejects.toMatchObject({ code: 'invalid_response' });
-    expect(malformedChild.killedWith).toBe('SIGTERM');
+    expect(malformedChild.killedWith).toEqual([]);
     await malformedClient.close();
 
     const unexpectedChild = new FakeChild();
@@ -158,10 +161,10 @@ describe('CodexAppServerClient', () => {
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(25);
     await requestExpectation;
-    expect(requestChild.killedWith).toBe('SIGTERM');
     await requestClient.close();
+    expect(requestChild.killedWith).toEqual([]);
 
-    const hangingChild = new FakeChild(false);
+    const hangingChild = new FakeChild(false, true);
     const hangingClient = new CodexAppServerClient({
       ...clientOptions(spawnedChild(hangingChild)),
       shutdownTimeoutMs: 10,
@@ -170,6 +173,52 @@ describe('CodexAppServerClient', () => {
     const close = hangingClient.close();
     await vi.advanceTimersByTimeAsync(30);
     await close;
-    expect(hangingChild.killedWith).toBe('SIGKILL');
+    expect(hangingChild.killedWith).toEqual(['SIGTERM', 'SIGKILL']);
+  });
+
+  it('automatically escalates request-timeout cleanup when SIGTERM is ignored', async () => {
+    vi.useFakeTimers();
+    const child = new FakeChild(false, true);
+    const client = new CodexAppServerClient({
+      ...clientOptions(spawnedChild(child)),
+      requestTimeoutMs: 10,
+      shutdownTimeoutMs: 5,
+    });
+    const request = client.request('hung');
+    const rejection = expect(request).rejects.toMatchObject({ code: 'timeout' });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(10);
+    await rejection;
+    expect(child.ended).toBe(true);
+    expect(child.killedWith).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(5);
+    expect(child.killedWith).toEqual(['SIGTERM']);
+    const closeDuringCleanup = client.close();
+    await vi.advanceTimersByTimeAsync(5);
+    await closeDuringCleanup;
+    await client.close();
+    expect(child.killedWith).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(client.isClosed).toBe(true);
+  });
+
+  it('automatically escalates malformed-protocol cleanup when SIGTERM is ignored', async () => {
+    vi.useFakeTimers();
+    const child = new FakeChild(false, true);
+    const client = new CodexAppServerClient({
+      ...clientOptions(spawnedChild(child)),
+      shutdownTimeoutMs: 5,
+    });
+    const request = client.request('rate-limits');
+    const rejection = expect(request).rejects.toMatchObject({ code: 'invalid_response' });
+    await vi.advanceTimersByTimeAsync(0);
+    child.stdout.emit('data', '{not-json}\n');
+    await rejection;
+    await vi.advanceTimersByTimeAsync(5);
+    expect(child.killedWith).toEqual(['SIGTERM']);
+    const closeDuringCleanup = client.close();
+    await vi.advanceTimersByTimeAsync(5);
+    await closeDuringCleanup;
+    expect(child.killedWith).toEqual(['SIGTERM', 'SIGKILL']);
   });
 });
