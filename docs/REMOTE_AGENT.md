@@ -8,6 +8,32 @@ The most important rule is:
 
 This prevents a compromised Hub session from automatically becoming unrestricted host access.
 
+## Phase 1A boundary
+
+The implemented Phase 1A Agent is read-only: it advertises only
+`machine.read.telemetry`, publishes bounded telemetry, and maintains an
+authenticated outbound WebSocket session. It does not expose action RPCs,
+shell access, process or service control, repository operations, task
+execution, worker execution, reboot/shutdown, or enrollment UI. Those remain
+deferred to Phase 1B or later.
+
+The Hub owns active session shutdown. It stops processing new Agent messages,
+requests a bounded graceful close with `hub_shutdown`, terminates hung sockets,
+and then completes Fastify shutdown. The Agent treats this like any other
+disconnect and reconnects normally. Rejected protocol connections are
+terminal: queued messages from that socket cannot update machine state.
+
+The current machine row persists the Agent protocol version alongside Agent
+metadata and latest telemetry. `SONARAN_AGENT_DISK_PATHS` accepts a
+comma-separated, trimmed, deduplicated list of up to 32 statfs paths and
+defaults to `/`; inaccessible paths are omitted individually.
+
+MachineHub exposes an injectable lifecycle event sink for authentication
+failures, connection/hello, protocol rejection, replacement, disconnect, and
+ONLINE/STALE transitions. Events use safe metadata only and are structured
+logging hooks, not a durable audit-history platform. Credentials, raw frames,
+and raw telemetry are never included.
+
 ## 1. Responsibilities
 
 The Agent owns:
@@ -114,7 +140,7 @@ processes:
 
 services:
   - id: sonoran-dev-api
-    systemdUnit: "sonoran-dev-api.service"
+      systemdUnit: "sonoran-dev-api.service"
     permissions:
       read: true
       restart: true

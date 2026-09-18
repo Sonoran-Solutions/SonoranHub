@@ -201,9 +201,12 @@ export type AgentServerMessage = z.infer<typeof agentServerMessageSchema>;
 export const machineConnectionStatusSchema = z.enum(['ONLINE', 'STALE', 'OFFLINE']);
 export type MachineConnectionStatus = z.infer<typeof machineConnectionStatusSchema>;
 
+export const machineProtocolVersionSchema = z.number().int().positive().max(1000);
+
 export const machineSummarySchema = z
   .object({
     identity: machineIdentitySchema,
+    protocolVersion: machineProtocolVersionSchema,
     agentVersion: boundedString(64),
     capabilities: z.array(machineCapabilitySchema).max(64),
     policyRevision: boundedString(128),

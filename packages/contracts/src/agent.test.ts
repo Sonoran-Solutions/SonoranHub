@@ -4,6 +4,7 @@ import {
   AGENT_PROTOCOL_VERSION,
   agentClientMessageSchema,
   machineTelemetrySchema,
+  machineSummarySchema,
 } from './agent.js';
 
 describe('Agent protocol contracts', () => {
@@ -31,5 +32,22 @@ describe('Agent protocol contracts', () => {
         disks: [],
       }).success,
     ).toBe(false);
+  });
+
+  it('requires the persisted protocol version in public machine summaries', () => {
+    const summary = {
+      identity: { id: 'main-pc', name: 'Main PC', platform: 'linux', arch: 'x64' },
+      protocolVersion: AGENT_PROTOCOL_VERSION,
+      agentVersion: '0.2.0',
+      capabilities: ['machine.read.telemetry'],
+      policyRevision: 'local-readonly-v1',
+      status: 'OFFLINE',
+      lastSeenAt: '2026-09-14T12:00:00.000Z',
+      telemetry: null,
+    };
+    expect(machineSummarySchema.parse(summary)).toEqual(summary);
+    expect(machineSummarySchema.safeParse({ ...summary, protocolVersion: undefined }).success).toBe(
+      false,
+    );
   });
 });

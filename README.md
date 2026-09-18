@@ -149,7 +149,15 @@ authenticated WebSocket, and reports CPU, memory, disk, and uptime telemetry.
 It has no remote command or shell capability in this phase. Cleartext `ws://`
 is accepted only for loopback development endpoints; remote Hub connections
 must use `wss://`. A configured Hub URL without `SONORAN_AGENT_TOKEN` fails
-closed.
+closed. Set `SONORAN_AGENT_DISK_PATHS=/,/mnt/data` to sample multiple
+configured filesystems; paths are trimmed, deduplicated, and statfs-only.
+
+Hub shutdown first stops Agent message processing, requests a bounded graceful
+close for live sessions, terminates sockets that do not close in time, and then
+lets Fastify finish closing. Protocol rejection is terminal for that socket,
+and lifecycle/security transitions are available through the injectable
+structured event sink without persisting a full audit stream. Machine detail
+metadata includes the persisted Agent protocol version.
 
 Shared services validate `NODE_ENV`, `LOG_LEVEL`, and `SERVICE_NAME` through
 `@sonoran-hub/config`. Structured logs carry service and optional correlation

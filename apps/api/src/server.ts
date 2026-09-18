@@ -30,6 +30,19 @@ app.addHook('onClose', async () => {
 try {
   await app.listen({ host, port });
   await capacity.start();
+  let shuttingDown = false;
+  const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    try {
+      await app.close();
+    } catch {
+      logger.error('api.shutdown_failed', { metadata: { error: 'API shutdown failed' } });
+      process.exitCode = 1;
+    }
+  };
+  process.once('SIGINT', () => void shutdown());
+  process.once('SIGTERM', () => void shutdown());
 } catch {
   logger.error('api.start_failed', { metadata: { error: 'API startup failed' } });
   await capacity.stop();

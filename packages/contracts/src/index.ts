@@ -52,6 +52,7 @@ export {
   machineConnectionStatusSchema,
   machineIdentitySchema,
   machinePlatformSchema,
+  machineProtocolVersionSchema,
   machineSummarySchema,
   machineTelemetrySchema,
   machinesResponseSchema,

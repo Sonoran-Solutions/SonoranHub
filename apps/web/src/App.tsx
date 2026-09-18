@@ -286,6 +286,7 @@ function MachineCard({ machine }: { machine: MachineSummary }) {
         <span>
           {machine.capabilities.length} capability{machine.capabilities.length === 1 ? '' : 'ies'}
         </span>
+        <span>Protocol v{machine.protocolVersion}</span>
         <span>{machine.identity.id}</span>
       </div>
     </article>

@@ -12,6 +12,7 @@ import {
   createPolicyRevision,
   loadOrCreateMachineId,
   assertSafeHubUrl,
+  parseDiskPaths,
   TelemetrySampler,
 } from './index.js';
 
@@ -45,9 +46,9 @@ class FakeWebSocket extends EventEmitter {
     this.emit('message', Buffer.from(typeof value === 'string' ? value : JSON.stringify(value)));
   }
 
-  remoteClose(): void {
+  remoteClose(code?: number, reason?: string): void {
     this.readyState = WebSocket.CLOSED;
-    this.emit('close');
+    this.emit('close', code, Buffer.from(reason ?? ''));
   }
 }
 
@@ -228,6 +229,26 @@ describe('Agent connection lifecycle', () => {
     agent.stop();
   });
 
+  it('reconnects normally after the Hub requests shutdown', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const agent = client();
+    await agent.connect();
+    const first = FakeWebSocket.instances[0]!;
+    first.open();
+    first.message(acceptedMessage());
+    await flush();
+    first.remoteClose(4002, 'hub_shutdown');
+    await vi.advanceTimersByTimeAsync(100);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    const second = FakeWebSocket.instances[1]!;
+    second.open();
+    second.message(acceptedMessage());
+    await flush();
+    expect(JSON.parse(second.sent[1]!).sequence).toBe(1);
+    agent.stop();
+  });
+
   it('closes on malformed, invalid, and protocol-error server messages', async () => {
     const errors: string[] = [];
     const agent = client({ onError: (error) => errors.push(error.message) });
@@ -263,6 +284,22 @@ describe('Agent connection lifecycle', () => {
 });
 
 describe('Telemetry sampling', () => {
+  it.each([
+    [undefined, ['/']],
+    ['', ['/']],
+    ['/,/mnt/data', ['/', '/mnt/data']],
+    [' / , /mnt/a ', ['/', '/mnt/a']],
+    ['/,/', ['/']],
+    ['/ , /mnt , /mnt', ['/', '/mnt']],
+  ])('normalizes configured disk paths %s', (value, expected) => {
+    expect(parseDiskPaths(value)).toEqual(expected);
+  });
+
+  it('limits configured disk paths to the telemetry contract maximum', () => {
+    const configured = Array.from({ length: 40 }, (_, index) => `/mnt/disk-${index}`);
+    expect(parseDiskPaths(configured.join(','))).toHaveLength(32);
+  });
+
   it('returns truthful first CPU sample and clamps deltas', () => {
     expect(calculateCpuPercent(undefined, { idle: 10, total: 10 })).toBeUndefined();
     expect(calculateCpuPercent({ idle: 10, total: 10 }, { idle: 10, total: 20 })).toBe(100);

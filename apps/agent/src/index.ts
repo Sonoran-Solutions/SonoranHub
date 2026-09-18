@@ -41,6 +41,7 @@ export interface AgentClientOptions {
   readonly capabilities?: readonly MachineCapability[];
   readonly stateDir?: string;
   readonly heartbeatIntervalMs?: number;
+  readonly diskPaths?: readonly string[];
   readonly reconnectBaseMs?: number;
   readonly reconnectMaxMs?: number;
   readonly telemetry?: () => Promise<MachineTelemetry>;
@@ -216,6 +217,15 @@ export function validateHeartbeatIntervalMs(value: number): number {
   return value;
 }
 
+export function parseDiskPaths(value: string | undefined): string[] {
+  const paths = (value ?? '')
+    .split(',')
+    .map((path) => path.trim())
+    .filter((path) => path.length > 0);
+  const uniquePaths = [...new Set(paths)].slice(0, 32);
+  return uniquePaths.length > 0 ? uniquePaths : ['/'];
+}
+
 export class AgentClient {
   private readonly options: AgentClientOptions;
   private readonly telemetrySampler: TelemetrySampler;
@@ -234,7 +244,7 @@ export class AgentClient {
 
   constructor(options: AgentClientOptions = {}) {
     this.options = options;
-    this.telemetrySampler = new TelemetrySampler();
+    this.telemetrySampler = new TelemetrySampler({ diskPaths: options.diskPaths });
   }
 
   async connect(): Promise<void> {
@@ -449,6 +459,7 @@ if (process.argv[1]?.endsWith('/index.ts') || process.argv[1]?.endsWith('/index.
         heartbeatIntervalMs: process.env.SONORAN_AGENT_HEARTBEAT_MS
           ? Number(process.env.SONORAN_AGENT_HEARTBEAT_MS)
           : AGENT_HEARTBEAT_INTERVAL_MS,
+        diskPaths: parseDiskPaths(process.env.SONORAN_AGENT_DISK_PATHS),
         onError: (error) => console.error(JSON.stringify({ ...status, error: error.message })),
       });
       void client.connect().catch((error: unknown) => {

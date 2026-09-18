@@ -145,6 +145,12 @@ ONLINE/STALE/OFFLINE semantics, and responsive Home/Machines views. Remote
 actions, enrollment UI, repository operations, workers, and task execution
 remain deferred to later phases.
 
+Phase 1A hardening also provides bounded Hub-owned Agent shutdown, terminal
+protocol rejection, persisted protocol-version metadata, configured statfs
+disk paths, and an injectable lifecycle/security event sink. These events are
+structured hooks only; no durable audit history or remote-action protocol is
+implemented.
+
 ### Work
 
 #### Agent identity and registration
@@ -154,6 +160,9 @@ remain deferred to later phases.
 - [x] Establish an authenticated outbound WebSocket connection.
 - [x] Add protocol version and Agent version to handshake.
 - [x] Add heartbeat and reconnect with jitter/backoff.
+- [x] Stop live sessions with a bounded Hub shutdown grace period.
+- [x] Make protocol rejection terminal for the connection.
+- [x] Persist and expose the negotiated protocol version.
 
 #### Telemetry
 
@@ -164,6 +173,7 @@ Collect a bounded initial set:
 - [x] CPU utilization;
 - [x] RAM total/used;
 - [x] disk total/used for configured volumes;
+- [x] configure bounded comma-separated disk paths through the Agent environment;
 - GPU and process/service summaries remain deferred.
 
 Do not block the phase on perfect cross-platform GPU support.

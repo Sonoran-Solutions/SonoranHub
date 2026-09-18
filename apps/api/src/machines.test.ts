@@ -10,7 +10,12 @@ import WebSocket from 'ws';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { buildApp } from './app.js';
-import { InMemoryMachineStore, MachineHub, type ActiveMachineSession } from './machines.js';
+import {
+  InMemoryMachineStore,
+  MachineHub,
+  type ActiveMachineSession,
+  type MachineAuditEvent,
+} from './machines.js';
 
 class FakeSocket extends EventEmitter {
   readyState: number = WebSocket.OPEN;
@@ -26,13 +31,22 @@ class FakeSocket extends EventEmitter {
     this.readyState = WebSocket.CLOSING;
   }
 
+  terminate(): void {
+    this.readyState = WebSocket.CLOSED;
+    this.emit('close');
+  }
+
   emitClose(): void {
     this.readyState = WebSocket.CLOSED;
     this.emit('close');
   }
 
   message(value: unknown): void {
-    this.emit('message', Buffer.from(JSON.stringify(value)), false);
+    this.emit(
+      'message',
+      Buffer.from(typeof value === 'string' ? value : JSON.stringify(value)),
+      false,
+    );
   }
 }
 
@@ -187,7 +201,10 @@ describe('MachineHub live session semantics', () => {
     const firstHub = new MachineHub({ store });
     await connectAndHeartbeat(firstHub, new FakeSocket());
     const restartedHub = new MachineHub({ store });
-    expect((await restartedHub.list()).machines[0]?.status).toBe('OFFLINE');
+    expect((await restartedHub.list()).machines[0]).toMatchObject({
+      status: 'OFFLINE',
+      protocolVersion: AGENT_PROTOCOL_VERSION,
+    });
   });
 
   it('rejects non-monotonic heartbeat sequences', async () => {
@@ -212,5 +229,200 @@ describe('MachineHub live session semantics', () => {
     const session = hub.getActiveSession('machine-x') as ActiveMachineSession;
     expect(session.socket).toBe(socket);
     expect(JSON.stringify(await hub.list())).not.toContain('socket');
+  });
+});
+
+describe('MachineHub shutdown and protocol terminals', () => {
+  it('gracefully closes a live socket before shutdown resolves', async () => {
+    const hub = new MachineHub({ store: new InMemoryMachineStore(), shutdownGraceMs: 500 });
+    const socket = new FakeSocket();
+    await connectAndHeartbeat(hub, socket);
+
+    const shutdown = hub.close();
+    expect(socket.closeCalls).toContainEqual({ code: 4002, reason: 'hub_shutdown' });
+    expect(hub.activeSessionCount).toBe(1);
+    socket.emitClose();
+    await shutdown;
+    expect(hub.activeSessionCount).toBe(0);
+  });
+
+  it('terminates a hung socket after the injectable grace period', async () => {
+    const hub = new MachineHub({ store: new InMemoryMachineStore(), shutdownGraceMs: 10 });
+    const socket = new FakeSocket();
+    await connectAndHeartbeat(hub, socket);
+    const startedAt = Date.now();
+    await hub.close();
+    expect(socket.closeCalls).toContainEqual({ code: 4002, reason: 'hub_shutdown' });
+    expect(socket.readyState).toBe(WebSocket.CLOSED);
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(hub.activeSessionCount).toBe(0);
+  });
+
+  it('closes all connected machines and ignores new activity during shutdown', async () => {
+    const store = new InMemoryMachineStore();
+    const hub = new MachineHub({ store, shutdownGraceMs: 10 });
+    const first = new FakeSocket();
+    const second = new FakeSocket();
+    await connectAndHeartbeat(hub, first, 'machine-one');
+    await connectAndHeartbeat(hub, second, 'machine-two');
+    const before = await store.get('machine-one');
+    const shutdown = hub.close();
+    first.message({
+      type: 'agent.heartbeat',
+      protocolVersion: AGENT_PROTOCOL_VERSION,
+      sequence: 2,
+      sentAt: telemetry.capturedAt,
+      telemetry: { ...telemetry, cpuPercent: 99 },
+    });
+    await shutdown;
+    expect(first.readyState).toBe(WebSocket.CLOSED);
+    expect(second.readyState).toBe(WebSocket.CLOSED);
+    await flushMessages();
+    expect(await store.get('machine-one')).toEqual(before);
+  });
+
+  it('makes protocol rejection terminal for a queued burst', async () => {
+    const store = new InMemoryMachineStore();
+    const hub = new MachineHub({ store });
+    const socket = new FakeSocket();
+    await connectAndHeartbeat(hub, socket);
+    const before = await store.get('machine-x');
+    socket.message('{not-json');
+    socket.message({
+      type: 'agent.heartbeat',
+      protocolVersion: AGENT_PROTOCOL_VERSION,
+      sequence: 2,
+      sentAt: telemetry.capturedAt,
+      telemetry: { ...telemetry, cpuPercent: 98 },
+    });
+    await flushMessages();
+    expect(socket.closeCalls.at(-1)).toEqual({ code: 1008, reason: 'invalid_message' });
+    expect(await store.get('machine-x')).toEqual(before);
+  });
+
+  it.each([
+    ['duplicate hello', (socket: FakeSocket) => socket.message(hello())],
+    [
+      'non-monotonic sequence',
+      (socket: FakeSocket) =>
+        socket.message({
+          type: 'agent.heartbeat',
+          protocolVersion: AGENT_PROTOCOL_VERSION,
+          sequence: 1,
+          sentAt: telemetry.capturedAt,
+          telemetry,
+        }),
+    ],
+  ])('%s rejects the socket and ignores later heartbeats', async (_label, invalidFrame) => {
+    const store = new InMemoryMachineStore();
+    const hub = new MachineHub({ store });
+    const socket = new FakeSocket();
+    await connectAndHeartbeat(hub, socket);
+    const before = await store.get('machine-x');
+    invalidFrame(socket);
+    await flushMessages();
+    socket.message({
+      type: 'agent.heartbeat',
+      protocolVersion: AGENT_PROTOCOL_VERSION,
+      sequence: 99,
+      sentAt: telemetry.capturedAt,
+      telemetry: { ...telemetry, cpuPercent: 100 },
+    });
+    await flushMessages();
+    expect(await store.get('machine-x')).toEqual(before);
+  });
+});
+
+describe('MachineHub lifecycle events', () => {
+  it('emits safe authentication, lifecycle, transition, replacement, and rejection events', async () => {
+    const events: MachineAuditEvent[] = [];
+    const store = new InMemoryMachineStore();
+    let current = Date.parse('2026-09-15T12:00:00.000Z');
+    const hub = new MachineHub({
+      store,
+      agentToken: 'secret-token',
+      staleAfterMs: 10,
+      now: () => current,
+      eventSink: { emit: (event) => events.push(event) },
+    });
+    const request = (authorization?: string) =>
+      ({ headers: authorization ? { authorization } : {} }) as IncomingMessage;
+    expect(hub.authenticate(request('Bearer wrong-token'))).toBe(false);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'agent.authentication_failed',
+        reason: 'invalid_token',
+      }),
+    );
+    expect(JSON.stringify(events)).not.toContain('wrong-token');
+
+    const first = new FakeSocket();
+    await connectAndHeartbeat(hub, first);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'agent.hello_accepted',
+        machineId: 'machine-x',
+        machineName: 'Main PC',
+        protocolVersion: 1,
+        agentVersion: '0.2.0',
+        policyRevision: 'sha256:test',
+        capabilities: ['machine.read.telemetry'],
+      }),
+    );
+    expect(events.filter((event) => event.type === 'agent.online')).toHaveLength(1);
+
+    current += 11;
+    expect((await hub.list()).machines[0]?.status).toBe('STALE');
+    expect((await hub.list()).machines[0]?.status).toBe('STALE');
+    expect(events.filter((event) => event.type === 'agent.stale')).toHaveLength(1);
+    first.message({
+      type: 'agent.heartbeat',
+      protocolVersion: AGENT_PROTOCOL_VERSION,
+      sequence: 2,
+      sentAt: telemetry.capturedAt,
+      telemetry,
+    });
+    await flushMessages();
+    expect(events.filter((event) => event.type === 'agent.online')).toHaveLength(2);
+
+    const second = new FakeSocket();
+    await connectAndHeartbeat(hub, second);
+    expect(events.filter((event) => event.type === 'agent.session_replaced')).toHaveLength(1);
+    first.emitClose();
+    expect(events.filter((event) => event.type === 'agent.disconnected')).toHaveLength(0);
+
+    second.message('{bad-json');
+    await flushMessages();
+    const rejection = events.find((event) => event.type === 'agent.protocol_rejected');
+    expect(rejection).toEqual(expect.objectContaining({ reason: 'invalid_message' }));
+    expect(JSON.stringify(rejection)).not.toContain('bad-json');
+    second.emitClose();
+    expect(events.filter((event) => event.type === 'agent.disconnected')).toHaveLength(1);
+  });
+});
+
+describe('MachineHub application shutdown', () => {
+  it('closes a real Agent WebSocket when Fastify closes', async () => {
+    const app = buildApp(undefined, { agentToken: 'abcdefgh' });
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === 'string') throw new Error('missing test server address');
+    const socket = new WebSocket(`ws://127.0.0.1:${address.port}/agent/ws`, {
+      headers: { authorization: 'Bearer abcdefgh' },
+    });
+    await new Promise<void>((resolve, reject) => {
+      socket.once('open', () => resolve());
+      socket.once('error', reject);
+    });
+    const closed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
+    const closeStartedAt = Date.now();
+    await app.close();
+    await Promise.race([
+      closed,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('socket stayed open')), 500),
+      ),
+    ]);
+    expect(Date.now() - closeStartedAt).toBeLessThan(500);
   });
 });

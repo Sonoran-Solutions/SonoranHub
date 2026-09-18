@@ -25,7 +25,12 @@ import {
 } from '@sonoran-hub/ai-capacity';
 
 import { DEFAULT_WEB_ORIGINS } from './cors.js';
-import { createAgentWebSocketServer, MachineHub, type MachineStore } from './machines.js';
+import {
+  createAgentWebSocketServer,
+  MachineHub,
+  type MachineEventSink,
+  type MachineStore,
+} from './machines.js';
 
 export interface BuildAppOptions {
   readonly capacityService?: CapacityService;
@@ -33,6 +38,7 @@ export interface BuildAppOptions {
   readonly machineStore?: MachineStore;
   readonly agentToken?: string;
   readonly machineHub?: MachineHub;
+  readonly machineEventSink?: MachineEventSink;
 }
 
 export function buildApp(
@@ -53,7 +59,13 @@ export function buildApp(
   const allowedOrigins = new Set(options.allowedOrigins ?? DEFAULT_WEB_ORIGINS);
   const machineHub =
     options.machineHub ??
-    new MachineHub({ store: options.machineStore, agentToken: options.agentToken });
+    new MachineHub({
+      store: options.machineStore,
+      agentToken: options.agentToken,
+      eventSink: options.machineEventSink ?? {
+        emit: (event) => app.log.info({ event: event.type, ...event }, event.type),
+      },
+    });
   const agentWebSocketServer = createAgentWebSocketServer();
 
   app.addHook('onRequest', (request, reply, done) => {
@@ -175,8 +187,11 @@ export function buildApp(
     });
   };
   app.server.on('upgrade', upgradeHandler);
-  app.addHook('onClose', async () => {
+  app.addHook('preClose', async () => {
     app.server.off('upgrade', upgradeHandler);
+    await machineHub.close();
+  });
+  app.addHook('onClose', async () => {
     await new Promise<void>((resolve) => agentWebSocketServer.close(() => resolve()));
   });
 

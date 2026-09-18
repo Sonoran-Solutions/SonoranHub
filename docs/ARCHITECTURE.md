@@ -159,6 +159,26 @@ It should **not** own:
 - provider CLI credentials that only need to exist on the Agent host;
 - Git working-copy mutation.
 
+### Current Phase 1A machine boundary
+
+Phase 1A implements only the authenticated outbound telemetry connection. The
+Hub keeps live WebSocket/session ownership in memory and stores one durable
+machine row containing identity, Agent/protocol metadata, latest telemetry, and
+last-seen time. A new API process therefore reports persisted machines as
+`OFFLINE` until their Agents reconnect.
+
+MachineHub shutdown is explicit and bounded: new activity is stopped, active
+sessions receive `hub_shutdown`, sockets get a short grace period, hung
+sockets are terminated, and only then does the WebSocket/Fastify shutdown
+continue. A protocol rejection marks the connection terminal, so queued
+messages cannot mutate persistent or live session state.
+
+Lifecycle/security transitions use an injectable structured event sink. The
+initial seam covers authentication failures, connection/hello, protocol
+rejection, replacement, disconnect, and ONLINE/STALE transitions. It is not a
+durable audit-event store. Events contain safe machine metadata only; tokens,
+authorization headers, raw frames, and raw telemetry are excluded.
+
 ## 4. Sonoran Agent responsibilities
 
 The Agent is the execution authority for its host.

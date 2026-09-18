@@ -16,6 +16,7 @@ const machine: PersistedMachine = {
     platform: 'linux',
     arch: 'x64',
   },
+  protocolVersion: 1,
   agentVersion: '0.2.0',
   capabilities: ['machine.read.telemetry'],
   policyRevision: 'sha256:test',
