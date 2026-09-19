@@ -181,6 +181,7 @@ export const projectAttentionSummarySchema = z
     failingCi: z.number().int().nonnegative().nullable(),
     openPullRequests: z.number().int().nonnegative().nullable(),
     attentionIssues: z.number().int().nonnegative().nullable(),
+    attentionIssuesHasMore: z.boolean().default(false),
   })
   .strict();
 
@@ -197,6 +198,7 @@ export const projectRepositorySummarySchema = z
     openIssueCount: z.number().int().nonnegative().nullable(),
     openIssueHasMore: z.boolean().default(false),
     attentionIssueCount: z.number().int().nonnegative().nullable(),
+    attentionIssueHasMore: z.boolean().default(false),
     freshness: githubFreshnessSchema,
     error: z
       .object({
@@ -247,6 +249,51 @@ export const projectDetailResponseSchema = z
   })
   .strict();
 
+export const gitHubWebhookEnvelopeSchema = z
+  .object({
+    repository: z
+      .object({
+        id: z.number().int().optional(),
+        name: z.string().optional(),
+        full_name: z.string().optional(),
+        owner: z
+          .object({
+            login: z.string().optional(),
+          })
+          .passthrough()
+          .optional(),
+      })
+      .passthrough()
+      .optional(),
+    action: z.string().optional(),
+  })
+  .passthrough();
+
+export const gitHubWebhookDeliveryOutcomeSchema = z.enum(['accepted', 'ignored']);
+
+export const gitHubWebhookDeliveryRecordSchema = z
+  .object({
+    deliveryId: z.string().min(1).max(128),
+    eventName: z.string().min(1).max(64),
+    repositoryOwner: z.string().nullable().optional(),
+    repositoryName: z.string().nullable().optional(),
+    outcome: gitHubWebhookDeliveryOutcomeSchema,
+    receivedAt: z.string(),
+    processedAt: z.string().nullable().optional(),
+  })
+  .strict();
+
+export const gitHubWebhookHealthSchema = z
+  .object({
+    configured: z.boolean(),
+    lastReceivedAt: z.string().optional(),
+    lastAcceptedAt: z.string().optional(),
+    lastEventName: z.string().optional(),
+    lastRepository: z.string().optional(),
+    lastErrorCode: z.string().optional(),
+  })
+  .strict();
+
 export type AttentionLabel = z.infer<typeof attentionLabelSchema>;
 export type ProjectId = z.infer<typeof projectIdSchema>;
 export type ProjectRepositoryConfig = z.infer<typeof projectRepositoryConfigSchema>;
@@ -265,3 +312,7 @@ export type ProjectSummary = z.infer<typeof projectSummarySchema>;
 export type ProjectDetail = z.infer<typeof projectDetailSchema>;
 export type ProjectsResponse = z.infer<typeof projectsResponseSchema>;
 export type ProjectDetailResponse = z.infer<typeof projectDetailResponseSchema>;
+export type GitHubWebhookEnvelope = z.infer<typeof gitHubWebhookEnvelopeSchema>;
+export type GitHubWebhookDeliveryOutcome = z.infer<typeof gitHubWebhookDeliveryOutcomeSchema>;
+export type GitHubWebhookDeliveryRecord = z.infer<typeof gitHubWebhookDeliveryRecordSchema>;
+export type GitHubWebhookHealth = z.infer<typeof gitHubWebhookHealthSchema>;

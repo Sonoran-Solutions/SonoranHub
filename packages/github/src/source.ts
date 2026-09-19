@@ -269,7 +269,7 @@ export class GitHubAppProjectSource implements GitHubProjectSource {
       const rawIssues = response.data.filter((item) => !item.pull_request);
       const labelFilterSet = new Set(attentionLabels.map((label) => label.trim().toLowerCase()));
 
-      const items: GitHubIssueSummary[] = rawIssues.slice(0, 30).map((issue) => {
+      const allIssues: GitHubIssueSummary[] = rawIssues.map((issue) => {
         const labels = issue.labels
           .map((label) => (typeof label === 'string' ? label : (label.name ?? '')))
           .filter(Boolean);
@@ -294,12 +294,19 @@ export class GitHubAppProjectSource implements GitHubProjectSource {
         };
       });
 
+      const attentionIssues = allIssues.filter((i) => i.isAttention);
+      const attentionCount = attentionIssues.length;
+      const attentionHasMore = linkHasMore;
+
+      const items: GitHubIssueSummary[] = allIssues.slice(0, 30);
       const hasMore = linkHasMore || rawIssues.length > 30;
 
       return {
         items,
         count: rawIssues.length,
         hasMore,
+        attentionCount,
+        attentionHasMore,
       };
     } catch (error) {
       throw classifyGitHubError(error);
@@ -566,10 +573,13 @@ export class FakeGitHubProjectSource implements GitHubProjectSource {
       ...issue,
       isAttention: filter.size > 0 && issue.labels.some((l) => filter.has(l.toLowerCase())),
     }));
+    const attentionCount = items.filter((i) => i.isAttention).length;
     return {
       items,
       count: found.count ?? found.items.length,
       hasMore: found.hasMore,
+      attentionCount,
+      attentionHasMore: found.hasMore,
     };
   }
 

@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   GitHubAdapter,
@@ -265,6 +265,225 @@ describe('ProjectService & Store', () => {
     expect(listResult.projects[0]!.attention.openPullRequests).toBeNull();
     expect(listResult.projects[0]!.attention.attentionIssues).toBeNull();
     expect(listResult.projects[0]!.attention.failingCi).toBeNull();
+
+    service.stop();
+  });
+
+  it('performs targeted repository refresh, preserving unrelated repository snapshots and not calling their APIs', async () => {
+    const multiRepoConfig = {
+      version: 1 as const,
+      projects: [
+        {
+          id: 'multi-repo-project',
+          name: 'Multi Repo Project',
+          description: 'Two repositories',
+          attentionLabels: ['bug'],
+          repositories: [
+            { owner: 'Sonoran-Solutions', name: 'RepoA', primary: true },
+            { owner: 'Sonoran-Solutions', name: 'RepoB', primary: false },
+          ],
+        },
+      ],
+    };
+
+    const store = new InMemoryProjectStore();
+    const source = new FakeGitHubProjectSource();
+
+    source.setRepository({
+      owner: 'Sonoran-Solutions',
+      name: 'RepoA',
+      defaultBranch: 'main',
+      isPrivate: false,
+      isArchived: false,
+      description: 'Repo A',
+      primaryLanguage: 'TypeScript',
+      updatedAt: '2026-09-18T10:00:00.000Z',
+      pushedAt: '2026-09-18T10:00:00.000Z',
+      url: 'https://github.com/Sonoran-Solutions/RepoA',
+    });
+    source.setRepository({
+      owner: 'Sonoran-Solutions',
+      name: 'RepoB',
+      defaultBranch: 'main',
+      isPrivate: false,
+      isArchived: false,
+      description: 'Repo B',
+      primaryLanguage: 'TypeScript',
+      updatedAt: '2026-09-18T10:00:00.000Z',
+      pushedAt: '2026-09-18T10:00:00.000Z',
+      url: 'https://github.com/Sonoran-Solutions/RepoB',
+    });
+    source.setCiState('Sonoran-Solutions', 'RepoA', { status: 'success', conclusion: 'success' });
+    source.setCiState('Sonoran-Solutions', 'RepoB', { status: 'success', conclusion: 'success' });
+
+    const adapter = new GitHubAdapter(source);
+    const service = new ProjectService({
+      store,
+      adapter,
+      projectConfig: multiRepoConfig,
+      refreshIntervalMs: 0,
+    });
+
+    await service.start();
+
+    const initialSnapshot = await store.getLatestGitHubSnapshot('multi-repo-project');
+    expect(initialSnapshot?.data.repositories).toHaveLength(2);
+    const repoBInitial = initialSnapshot?.data.repositories.find((r) => r.name === 'RepoB');
+    expect(repoBInitial).toBeDefined();
+
+    // Now update Repo A in source (e.g. CI fails, open PR added)
+    source.setCiState('Sonoran-Solutions', 'RepoA', { status: 'failure', conclusion: 'failure' });
+    source.setPullRequests('Sonoran-Solutions', 'RepoA', [
+      {
+        number: 42,
+        title: 'Failing PR',
+        draft: false,
+        updatedAt: '2026-09-18T21:00:00.000Z',
+        url: 'https://github.com/Sonoran-Solutions/RepoA/pull/42',
+        ciState: 'failure',
+      },
+    ]);
+
+    // Spy on adapter.collectRepository to prove RepoB is NOT collected
+    const collectSpy = vi.spyOn(adapter, 'collectRepository');
+
+    // Trigger targeted refresh for Repo A only
+    await service.refreshRepository('Sonoran-Solutions', 'RepoA');
+
+    // Assert collectRepository was called ONLY for Repo A, NOT Repo B
+    const calledRepos = collectSpy.mock.calls.map(([target]) => target.name);
+    expect(calledRepos).toContain('RepoA');
+    expect(calledRepos).not.toContain('RepoB');
+
+    // Check new snapshot
+    const updatedSnapshot = await store.getLatestGitHubSnapshot('multi-repo-project');
+    expect(updatedSnapshot?.id).not.toBe(initialSnapshot?.id);
+
+    const repoAUpdated = updatedSnapshot?.data.repositories.find((r) => r.name === 'RepoA');
+    const repoBPreserved = updatedSnapshot?.data.repositories.find((r) => r.name === 'RepoB');
+
+    expect(repoAUpdated?.ciState).toBe('failure');
+    expect(repoAUpdated?.openPrCount).toBe(1);
+
+    // Repo B must be preserved exactly as before
+    expect(repoBPreserved?.snapshot?.url).toBe(repoBInitial?.snapshot?.url);
+    expect(repoBPreserved?.ciState).toBe('success');
+
+    // Project attention recomputed: failingCi is now 1, open PR is 1
+    expect(updatedSnapshot?.data.attention.failingCi).toBe(1);
+    expect(updatedSnapshot?.data.attention.openPullRequests).toBe(1);
+
+    service.stop();
+  });
+
+  it('reconciles all projects referencing a repository when multi-project mapping exists', async () => {
+    const multiProjectConfig = {
+      version: 1 as const,
+      projects: [
+        {
+          id: 'proj-1',
+          name: 'Project One',
+          attentionLabels: ['bug'],
+          repositories: [{ owner: 'Sonoran-Solutions', name: 'SharedRepo', primary: true }],
+        },
+        {
+          id: 'proj-2',
+          name: 'Project Two',
+          attentionLabels: ['bug'],
+          repositories: [{ owner: 'Sonoran-Solutions', name: 'SharedRepo', primary: true }],
+        },
+      ],
+    };
+
+    const store = new InMemoryProjectStore();
+    const source = new FakeGitHubProjectSource();
+    source.setRepository({
+      owner: 'Sonoran-Solutions',
+      name: 'SharedRepo',
+      defaultBranch: 'main',
+      isPrivate: false,
+      isArchived: false,
+      description: 'Shared Repo',
+      primaryLanguage: 'TypeScript',
+      updatedAt: '2026-09-18T10:00:00.000Z',
+      pushedAt: '2026-09-18T10:00:00.000Z',
+      url: 'https://github.com/Sonoran-Solutions/SharedRepo',
+    });
+    source.setCiState('Sonoran-Solutions', 'SharedRepo', {
+      status: 'success',
+      conclusion: 'success',
+    });
+
+    const adapter = new GitHubAdapter(source);
+    const service = new ProjectService({
+      store,
+      adapter,
+      projectConfig: multiProjectConfig,
+      refreshIntervalMs: 0,
+    });
+
+    await service.start();
+
+    // Now update SharedRepo in source
+    source.setCiState('Sonoran-Solutions', 'SharedRepo', {
+      status: 'failure',
+      conclusion: 'failure',
+    });
+
+    // Target refresh for SharedRepo
+    await service.refreshRepository('Sonoran-Solutions', 'SharedRepo');
+
+    const snap1 = await store.getLatestGitHubSnapshot('proj-1');
+    const snap2 = await store.getLatestGitHubSnapshot('proj-2');
+
+    expect(snap1?.data.repositories[0]?.ciState).toBe('failure');
+    expect(snap2?.data.repositories[0]?.ciState).toBe('failure');
+
+    service.stop();
+  });
+
+  it('retains previous snapshot as stale when targeted refresh hits rate limit', async () => {
+    const store = new InMemoryProjectStore();
+    const source = new FakeGitHubProjectSource();
+    source.setRepository({
+      owner: 'Sonoran-Solutions',
+      name: 'SonoranHub',
+      defaultBranch: 'main',
+      isPrivate: false,
+      isArchived: false,
+      description: 'Control plane',
+      primaryLanguage: 'TypeScript',
+      updatedAt: '2026-09-18T10:00:00.000Z',
+      pushedAt: '2026-09-18T10:00:00.000Z',
+      url: 'https://github.com/Sonoran-Solutions/SonoranHub',
+    });
+
+    const adapter = new GitHubAdapter(source);
+    const service = new ProjectService({
+      store,
+      adapter,
+      projectConfig: sampleConfig,
+      refreshIntervalMs: 0,
+    });
+
+    await service.start();
+
+    const initialSnapshot = await store.getLatestGitHubSnapshot('sonoran-hub');
+    expect(initialSnapshot?.freshness).toBe('fresh');
+
+    // Simulate rate limit
+    source.setRateLimit({
+      remaining: 0,
+      limit: 5000,
+      resetAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+
+    await service.refreshRepository('Sonoran-Solutions', 'SonoranHub');
+
+    // Previous snapshot still retained
+    const afterRateLimitSnapshot = await store.getLatestGitHubSnapshot('sonoran-hub');
+    expect(afterRateLimitSnapshot).not.toBeNull();
+    expect(afterRateLimitSnapshot?.id).toBe(initialSnapshot?.id);
 
     service.stop();
   });

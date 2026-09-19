@@ -939,6 +939,7 @@ function HomeProjectSummary({
   const attentionIssuesTotal = hasUnknownIssues
     ? null
     : projects.reduce((sum, p) => sum + (p.attention.attentionIssues ?? 0), 0);
+  const attentionIssuesHasMore = projects.some((p) => p.attention.attentionIssuesHasMore);
 
   const allFresh = projects.every((p) => p.freshness === 'fresh');
   const anyStaleOrUnavailable = projects.some(
@@ -973,7 +974,8 @@ function HomeProjectSummary({
             <span
               className={`metric-pill ${(attentionIssuesTotal ?? 0) > 0 ? 'metric-pill-warning' : ''}`}
             >
-              <strong>{formatCount(attentionIssuesTotal)}</strong> attention issues
+              <strong>{formatCount(attentionIssuesTotal, attentionIssuesHasMore)}</strong> attention
+              issues
             </span>
             {anyStaleOrUnavailable ? (
               <span className="metric-pill metric-pill-muted">
@@ -1106,7 +1108,12 @@ function ProjectCard({
             {project.attention.attentionIssues !== null && project.attention.attentionIssues > 0 ? (
               <span className="attention-tag">
                 {' '}
-                ({project.attention.attentionIssues} attention)
+                (
+                {formatCount(
+                  project.attention.attentionIssues,
+                  project.attention.attentionIssuesHasMore,
+                )}{' '}
+                attention)
               </span>
             ) : null}
           </strong>
@@ -1233,7 +1240,7 @@ function ProjectDetailPage({
             ? `${project.attention.failingCi} failing CI checks. `
             : ''}
           {(project.attention.attentionIssues ?? 0) > 0
-            ? `${project.attention.attentionIssues} issues flagged for attention.`
+            ? `${formatCount(project.attention.attentionIssues, project.attention.attentionIssuesHasMore)} issues flagged for attention.`
             : ''}
         </div>
       ) : null}
@@ -1291,7 +1298,10 @@ function OverviewTab({ project }: { project: ProjectDetail }) {
           <strong
             className={`stat-value ${(project.attention.attentionIssues ?? 0) > 0 ? 'text-warning' : ''}`}
           >
-            {formatCount(project.attention.attentionIssues)}
+            {formatCount(
+              project.attention.attentionIssues,
+              project.attention.attentionIssuesHasMore,
+            )}
           </strong>
         </div>
         <div className="stat-card">
@@ -1592,7 +1602,14 @@ function GitHubTab({ project }: { project: ProjectDetail }) {
 
       <section className="cockpit-section">
         <div className="section-heading">
-          <h3>Attention Issues ({project.attentionIssues.length})</h3>
+          <h3>
+            Attention Issues (
+            {formatCount(
+              project.attention.attentionIssues ?? project.attentionIssues.length,
+              project.attention.attentionIssuesHasMore,
+            )}
+            )
+          </h3>
           {primaryRepo?.snapshot?.url && isSafeGitHubUrl(primaryRepo.snapshot.url) ? (
             <a
               className="text-link"

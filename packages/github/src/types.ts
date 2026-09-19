@@ -18,6 +18,8 @@ export interface GitHubPaginatedList<T> {
   readonly items: readonly T[];
   readonly count: number;
   readonly hasMore: boolean;
+  readonly attentionCount?: number;
+  readonly attentionHasMore?: boolean;
 }
 
 export interface GitHubProjectSource {
@@ -50,6 +52,7 @@ export interface NormalizedRepositoryResult {
   readonly openIssueCount: number | null;
   readonly openIssueHasMore: boolean;
   readonly attentionIssueCount: number | null;
+  readonly attentionIssueHasMore: boolean;
   readonly freshness: GitHubFreshness;
   readonly error?: { readonly code: string; readonly message: string };
 }

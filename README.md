@@ -124,23 +124,32 @@ pnpm dev:agent  # Sonoran Agent process
 The API exposes `GET /health`, `GET /machines`,
 `POST /machines/:machineId/actions`, `GET /machines/:machineId/actions`, and
 `GET /actions/:actionId`, plus `GET /capacity` and bounded
-`GET /capacity/history?provider=&since=&limit=`, as well as `GET /projects` and
-`GET /projects/:projectId`. Open `http://127.0.0.1:5173/projects` for the
+`GET /capacity/history?provider=&since=&limit=`, as well as `GET /projects`,
+`GET /projects/:projectId`, and `POST /github/webhooks`. Open `http://127.0.0.1:5173/projects` for the
 responsive Projects list and detail cockpit, `http://127.0.0.1:5173/capacity`
 for the Capacity dashboard, or `http://127.0.0.1:5173/machines` for connected
 Agent telemetry. The Home view (`/`) features an Attention Card highlighting
-repositories with failing CI or PRs awaiting review.
+repositories with failing CI or PRs awaiting review (with bounded count support, e.g. `3+`).
 
 Project definitions are loaded from `config/projects.json` (customizable via
 `SONORAN_PROJECTS_PATH`). Hub synchronizes projects to PostgreSQL and refreshes
 normalized repository snapshots from GitHub via GitHub App credentials
 (`GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID`, and `GITHUB_PRIVATE_KEY`). If credentials are not configured,
 Hub gracefully degrades to an unconfigured state without failing API startup or
-
 breaking the UI. Test GitHub App connectivity safely with `pnpm smoke:github`.
 
+GitHub webhooks (`POST /github/webhooks`) provide low-latency reconciliation signals
+without replacing GitHub's read APIs as the authoritative source of truth. Ingestion
+verifies raw-body HMAC-SHA256 signatures (`X-Hub-Signature-256`) against `GITHUB_WEBHOOK_SECRET`
+in constant time before inspecting payloads, rejects payloads exceeding 1 MiB with HTTP 413,
+deduplicates delivery IDs in PostgreSQL (`github_webhook_deliveries`) or memory, coalesces rapid events
+via debounced refresh queues (500–1500ms), and prunes delivery records after a configurable retention window
+(`GITHUB_WEBHOOK_DELIVERY_RETENTION_HOURS`, default 72h). Test webhook ingestion and targeted reconciliation
+end-to-end with `pnpm smoke:github-webhook`.
+
 The provider refresh default is every 60 seconds and can be changed with
-`CAPACITY_REFRESH_INTERVAL_MS`. The browser polls the Hub API every 15 seconds
+`CAPACITY_REFRESH_INTERVAL_MS`. Periodic GitHub polling (`GITHUB_REFRESH_INTERVAL_MS`)
+remains active as a durable fallback. The browser polls the Hub API every 15 seconds
 for persisted snapshots; it never calls Codex, Gemini, DeepSeek, OpenRouter, or
 GitHub directly.
 Codex capacity comes from the server-side official local `codex app-server`; an
@@ -209,13 +218,14 @@ If those seven things work reliably from an Android phone away from the main PC,
 
 ## Current status
 
-**Phase 2A implemented.** Read-only GitHub project control plane is live. Hub
-loads configured Sonoran Solutions projects, synchronizes them to PostgreSQL,
-and normalizes GitHub repository state (branches, commits, pull requests,
-issues, and aggregated CI/Actions status) via a read-only GitHub App adapter.
-Responsive Projects list, Project detail cockpit, and Home attention card are
-available on desktop and mobile. Phase 1B Agent transport, telemetry, and typed
-policy-enforced remote actions remain stable. GitHub webhooks (Phase 2B),
-workers, Git mutation, and task execution (Phase 3) remain deferred.
+**Phase 2B implemented.** Signed GitHub webhook ingestion & targeted reconciliation is live.
+Hub verifies incoming webhooks using constant-time raw-body HMAC-SHA256 signatures,
+deduplicates delivery IDs in PostgreSQL (`github_webhook_deliveries`), coalesces rapid events
+via debounced queues (500–1500ms), and performs targeted reconciliation against authoritative
+GitHub read APIs without storing webhook payloads as source of truth. Periodic polling
+(`GITHUB_REFRESH_INTERVAL_MS`) remains active as a durable fallback. Responsive Projects list,
+Project detail cockpit, and Home attention card support bounded counts (`3+`). Phase 1B
+Agent transport, telemetry, and typed policy-enforced remote actions remain stable.
+Workers, Git mutation, and task execution (Phase 3) remain deferred.
 
 Start with [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).

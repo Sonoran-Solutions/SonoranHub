@@ -278,10 +278,16 @@ Phase 2A requires strictly read-only GitHub App permissions:
 - URLs returned in snapshots are checked against safe protocols (`https:`, `http:`) to prevent malicious scheme injection in the UI.
 
 
-### Webhooks (Deferred to Phase 2B)
+### Webhooks (Phase 2B Implementation)
 
-Validate webhook signatures (`X-Hub-Signature-256`) with a shared secret before processing events.
-Treat issue/PR text as untrusted user content; never turn webhook text directly into shell commands.
+- **Timing-safe raw-body HMAC-SHA256 verification:** Webhook requests at `POST /github/webhooks` require a valid `X-Hub-Signature-256` header. The signature is computed against the exact unparsed raw request buffer using `crypto.createHmac('sha256', secret)` and compared using `crypto.timingSafeEqual` with an explicit length guard to prevent timing side-channel attacks.
+- **Verification precedes JSON parsing:** Verification is executed before JSON decoding or inspection of any payload fields. Requests with missing signatures, invalid hex encodings, or signature mismatches fail immediately with 401 Unauthorized (`github_webhook_invalid_signature`).
+- **Secret isolation:** `GITHUB_WEBHOOK_SECRET` is configured independently from GitHub App credentials (`GITHUB_PRIVATE_KEY`). It is server-side only, never transmitted to the browser, never persisted to PostgreSQL, and redacted in logs. If `GITHUB_WEBHOOK_SECRET` is unconfigured, the endpoint returns 503 Service Unavailable (`github_webhook_unconfigured`).
+- **Payload untrusted by design:** Webhook payloads are treated as untrusted network inputs and are never executed as commands or stored directly as project truth. Only repository identity (`owner` and `repo`) is extracted to enqueue targeted reconciliation via GitHub's authoritative read APIs.
+- **Request bounding:** The webhook route enforces a strict 1 MiB body limit (`bodyLimit: 1_048_576`), rejecting oversized payloads with Fastify's native HTTP 413 before memory exhaustion occurs.
+- **Delivery deduplication & replay protection:** Each delivery is tracked by `delivery_id` (`^[a-zA-Z0-9_-]{1,128}$`) using atomic database operations (`INSERT ... ON CONFLICT (delivery_id) DO NOTHING RETURNING delivery_id`). Duplicate deliveries return 202 Accepted without re-triggering reconciliation.
+- **Audit retention:** Webhook delivery records are retained only for operational debugging and audit, automatically pruned after `GITHUB_WEBHOOK_DELIVERY_RETENTION_HOURS` (default 72 hours).
+- **Production TLS assumption:** While raw-body HMAC verification guarantees payload integrity and sender authenticity, production deployments assume TLS termination at the reverse proxy (HTTPS) to safeguard transmissions against packet inspection and replay.
 
 ## 12. Provider integrations
 

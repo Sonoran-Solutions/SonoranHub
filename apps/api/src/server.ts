@@ -25,6 +25,13 @@ for (const envCandidate of ['.env', '../../.env', '../.env']) {
   }
 }
 
+import {
+  InMemoryGitHubWebhookDeliveryStore,
+  PostgresGitHubWebhookDeliveryStore,
+  createWebhookRetentionManager,
+} from './webhookDeliveryStore.js';
+import { GitHubRefreshCoordinator } from './refreshCoordinator.js';
+
 const { Pool } = pg;
 
 const port = Number(process.env.PORT ?? 3000);
@@ -41,6 +48,26 @@ const projects = createProjectsRuntime({
   logger,
   pool: machinePool,
 });
+
+const webhookDeliveryStore = machinePool
+  ? new PostgresGitHubWebhookDeliveryStore(machinePool)
+  : new InMemoryGitHubWebhookDeliveryStore();
+
+const retentionHours = process.env.GITHUB_WEBHOOK_DELIVERY_RETENTION_HOURS
+  ? Number(process.env.GITHUB_WEBHOOK_DELIVERY_RETENTION_HOURS)
+  : undefined;
+
+const webhookRetention = createWebhookRetentionManager({
+  store: webhookDeliveryStore,
+  retentionHours,
+  logger,
+});
+
+const webhookCoordinator = new GitHubRefreshCoordinator({
+  refreshHandler: async (owner, repo) => projects.service.refreshRepository(owner, repo),
+  logger,
+});
+
 const app = buildApp(config, {
   capacityService: capacity.service,
   projectService: projects.service,
@@ -48,9 +75,14 @@ const app = buildApp(config, {
   machineStore: machinePool ? new PostgresMachineStore(machinePool) : undefined,
   machineActionStore: machinePool ? new PostgresMachineActionStore(machinePool) : undefined,
   agentToken: process.env.SONORAN_AGENT_TOKEN,
+  webhookSecret: process.env.GITHUB_WEBHOOK_SECRET,
+  webhookDeliveryStore,
+  refreshCoordinator: webhookCoordinator,
 });
 
 app.addHook('onClose', async () => {
+  webhookRetention.stop();
+  await webhookCoordinator.stop();
   projects.stop();
   await capacity.stop();
   await machinePool?.end();
@@ -60,6 +92,7 @@ try {
   await app.listen({ host, port });
   await projects.start();
   await capacity.start();
+  await webhookRetention.start();
   let shuttingDown = false;
   const shutdown = async () => {
     if (shuttingDown) return;
@@ -75,6 +108,8 @@ try {
   process.once('SIGTERM', () => void shutdown());
 } catch {
   logger.error('api.start_failed', { metadata: { error: 'API startup failed' } });
+  webhookRetention.stop();
+  await webhookCoordinator.stop();
   projects.stop();
   await capacity.stop();
   await machinePool?.end();

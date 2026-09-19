@@ -40,6 +40,12 @@ import {
 } from './machines.js';
 import { type MachineActionStore } from './actions.js';
 import { type ProjectService } from './projects.js';
+import { registerGitHubWebhookRoutes } from './webhooks.js';
+import {
+  InMemoryGitHubWebhookDeliveryStore,
+  type GitHubWebhookDeliveryStore,
+} from './webhookDeliveryStore.js';
+import { GitHubRefreshCoordinator } from './refreshCoordinator.js';
 
 export interface BuildAppOptions {
   readonly capacityService?: CapacityService;
@@ -50,6 +56,9 @@ export interface BuildAppOptions {
   readonly agentToken?: string;
   readonly machineHub?: MachineHub;
   readonly machineEventSink?: MachineEventSink;
+  readonly webhookSecret?: string;
+  readonly webhookDeliveryStore?: GitHubWebhookDeliveryStore;
+  readonly refreshCoordinator?: GitHubRefreshCoordinator;
 }
 
 export function buildApp(
@@ -79,6 +88,36 @@ export function buildApp(
       },
     });
   const agentWebSocketServer = createAgentWebSocketServer();
+
+  const deliveryStore = options.webhookDeliveryStore ?? new InMemoryGitHubWebhookDeliveryStore();
+  const refreshCoordinator =
+    options.refreshCoordinator ??
+    new GitHubRefreshCoordinator({
+      refreshHandler: async (owner, repo) => {
+        if (options.projectService) {
+          await options.projectService.refreshRepository(owner, repo);
+        }
+      },
+    });
+
+  if (options.projectService) {
+    registerGitHubWebhookRoutes(app, {
+      webhookSecret: options.webhookSecret,
+      deliveryStore,
+      refreshCoordinator,
+      projectService: options.projectService,
+    });
+  } else {
+    app.post('/github/webhooks', async (_req, reply) => {
+      reply.code(503);
+      return {
+        error: {
+          code: 'github_webhook_unconfigured',
+          message: 'GitHub webhook subsystem is unconfigured',
+        },
+      };
+    });
+  }
 
   app.addHook('onRequest', (request, reply, done) => {
     reply.header('x-request-id', request.id);
@@ -289,6 +328,7 @@ export function buildApp(
   app.server.on('upgrade', upgradeHandler);
   app.addHook('preClose', async () => {
     app.server.off('upgrade', upgradeHandler);
+    await refreshCoordinator.stop();
     await machineHub.close();
   });
   app.addHook('onClose', async () => {

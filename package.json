@@ -21,6 +21,7 @@
     "smoke:gemini": "pnpm build:packages && node scripts/smoke-gemini.mjs",
     "smoke:agent-actions": "pnpm build:packages && node scripts/smoke-agent-actions.mjs",
     "smoke:github": "pnpm build:packages && node scripts/smoke-github.mjs",
+    "smoke:github-webhook": "pnpm build:packages && pnpm --filter @sonoran-hub/api build && node scripts/smoke-github-webhook.mjs",
     "format": "prettier --write \"**/*.{js,ts,tsx,json,css,yml,yaml}\"",
     "format:check": "prettier --check \"**/*.{js,ts,tsx,json,css,yml,yaml}\"",
     "lint": "eslint .",

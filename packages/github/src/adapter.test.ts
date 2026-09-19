@@ -169,6 +169,7 @@ describe('GitHubAdapter', () => {
     expect(result.openIssueCount).toBe(55);
     expect(result.openIssueHasMore).toBe(true);
     expect(result.attentionIssueCount).toBe(1);
+    expect(result.attentionIssueHasMore).toBe(true);
   });
 
   it('handles partial failures without destroying repository snapshot', async () => {
@@ -193,6 +194,7 @@ describe('GitHubAdapter', () => {
       openIssueCount: 0,
       openIssueHasMore: false,
       attentionIssueCount: 0,
+      attentionIssueHasMore: false,
       freshness: 'fresh' as const,
     };
 

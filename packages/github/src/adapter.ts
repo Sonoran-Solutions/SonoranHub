@@ -150,6 +150,7 @@ export class GitHubAdapter {
         openIssueCount: null,
         openIssueHasMore: false,
         attentionIssueCount: null,
+        attentionIssueHasMore: false,
         freshness: 'unavailable',
         error: repoError,
       };
@@ -183,6 +184,8 @@ export class GitHubAdapter {
           items: previousResult?.attentionIssues ?? [],
           count: previousResult?.openIssueCount ?? null,
           hasMore: previousResult?.openIssueHasMore ?? false,
+          attentionCount: previousResult?.attentionIssueCount ?? undefined,
+          attentionHasMore: previousResult?.attentionIssueHasMore ?? false,
         };
       });
 
@@ -211,9 +214,13 @@ export class GitHubAdapter {
     // attentionIssues must only contain issues flagged as attention!
     const attentionIssues = issuesResult.items.filter((i) => i.isAttention);
     const attentionIssueCount =
-      issuesResult.count !== null
-        ? attentionIssues.length
-        : (previousResult?.attentionIssueCount ?? null);
+      issuesResult.attentionCount !== undefined
+        ? issuesResult.attentionCount
+        : issuesResult.count !== null
+          ? attentionIssues.length
+          : (previousResult?.attentionIssueCount ?? null);
+    const attentionIssueHasMore =
+      issuesResult.attentionHasMore ?? previousResult?.attentionIssueHasMore ?? false;
 
     const freshness: GitHubFreshness = partialError ? 'partial' : 'fresh';
     const rateLimit = await this.source.getRateLimit().catch(() => null);
@@ -255,6 +262,7 @@ export class GitHubAdapter {
       openIssueCount: issuesResult.count,
       openIssueHasMore: issuesResult.hasMore,
       attentionIssueCount,
+      attentionIssueHasMore,
       freshness,
       error: partialError,
     };

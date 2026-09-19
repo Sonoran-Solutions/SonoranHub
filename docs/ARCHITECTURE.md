@@ -390,8 +390,63 @@ Snapshot data is cached in `project_github_snapshots` with a configurable TTL.
 When GitHub credentials are unconfigured, `UnconfiguredGitHubProjectSource` returns
 safe stub snapshots, allowing Hub API and UI to operate seamlessly without crashes.
 
-Incoming GitHub webhooks (Phase 2B) and task/issue/PR mutation (Phase 3) remain
-deferred.
+### Phase 2B signed webhook ingestion and targeted reconciliation
+
+Phase 2B reduces the latency between GitHub activity and Sonoran Hub state without turning webhook payloads into a second source of truth:
+
+```text
+GitHub
+   │
+   │ signed webhook (HTTPS POST /github/webhooks)
+   ▼
+Fastify Webhook Route
+   │
+   ├── Raw-body buffer parser (isolated, 1 MiB limit → HTTP 413)
+   ├── Constant-time HMAC-SHA256 verification (X-Hub-Signature-256 vs GITHUB_WEBHOOK_SECRET)
+   ├── Delivery ID validation & deduplication (PostgreSQL github_webhook_deliveries)
+   ├── Envelope extraction (owner, repo, event)
+   └── Return 202 Accepted
+           │
+           ▼
+GitHubRefreshCoordinator (in-process)
+   │
+   ├── Keyed debounce queue (owner/repo, 500ms debounce, 1500ms max delay)
+   ├── Coalesces burst events (push, pr, issues, check_run)
+   ├── In-flight tracking with dirty follow-up rescheduling
+   └── FIFO serialized execution via withProjectLock(projectId)
+           │
+           ▼
+ProjectService.refreshRepository(owner, repo)
+   │
+   ├── Targeted query via GitHubAdapter / GitHubAppProjectSource (authoritative read APIs)
+   ├── Preserves unaffected repository snapshots and backoff states
+   └── Persists updated snapshot to PostgreSQL (project_github_snapshots)
+           │
+           ▼
+Browser UI (polls GET /projects every ~15s)
+```
+
+#### Core Architectural Invariants
+
+1. **Invalidation Signal, Not Source of Truth:**
+   Webhook payloads are never persisted directly as project truth or executed as commands. A verified webhook is solely a low-latency trigger to invalidate cached state and invoke GitHub's authoritative read APIs via `GitHubAdapter`.
+
+2. **Strict Verification Before Parsing:**
+   HMAC-SHA256 verification (`verifyGitHubWebhookSignature`) operates on the exact raw request bytes before JSON parsing or schema inspection. Mismatched signatures or missing secrets fail immediately with 401 Unauthorized or 503 Service Unavailable.
+
+3. **Secret Isolation:**
+   `GITHUB_WEBHOOK_SECRET` is kept server-side in the Hub API process. It is completely isolated from GitHub App private keys (`GITHUB_PRIVATE_KEY`), never transmitted to the browser, never persisted to PostgreSQL, and never logged.
+
+4. **Production HTTPS Assumption:**
+   While the raw-body HMAC-SHA256 signature guarantees authenticity and payload integrity from GitHub, production deployments assume TLS termination at the reverse proxy / ingress layer (e.g. Caddy, Traefik, Nginx, or Cloudflare) to prevent eavesdropping and replay attacks in transit.
+
+5. **Durable Polling Fallback:**
+   Periodic background polling (`GITHUB_REFRESH_INTERVAL_MS`, default 60s) remains active regardless of webhook activity, ensuring eventual consistency if webhooks are delayed, dropped, or unconfigured.
+
+6. **Retention and Storage Hygiene:**
+   Webhook delivery records are stored in `github_webhook_deliveries` (`delivery_id`, `event_name`, `repository_owner`, `repository_name`, `outcome`, `received_at`, `processed_at`). A scheduled retention manager (`createWebhookRetentionManager`) automatically prunes audit records older than `GITHUB_WEBHOOK_DELIVERY_RETENTION_HOURS` (default 72 hours).
+
+Task execution, Git worktrees, and code/issue/PR mutations (Phase 3) remain deferred.
 
 ## 10. AI capacity architecture
 

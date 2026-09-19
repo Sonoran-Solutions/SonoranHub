@@ -49,6 +49,7 @@ export class ProjectService {
   private readonly refreshIntervalMs: number;
   private readonly logger?: StructuredLogger;
 
+  private readonly projectLocks = new Map<string, Promise<void>>();
   private refreshTimer?: ReturnType<typeof setInterval>;
   private refreshing = false;
   private stopped = false;
@@ -60,6 +61,75 @@ export class ProjectService {
     this.projectConfig = options.projectConfig;
     this.refreshIntervalMs = options.refreshIntervalMs ?? DEFAULT_GITHUB_REFRESH_INTERVAL_MS;
     this.logger = options.logger;
+  }
+
+  private async withProjectLock<T>(projectId: string, fn: () => Promise<T>): Promise<T> {
+    const currentLock = this.projectLocks.get(projectId) ?? Promise.resolve();
+    let release: () => void = () => {};
+    const nextLock = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.projectLocks.set(projectId, nextLock);
+
+    try {
+      await currentLock;
+      return await fn();
+    } finally {
+      release();
+      if (this.projectLocks.get(projectId) === nextLock) {
+        this.projectLocks.delete(projectId);
+      }
+    }
+  }
+
+  private computeAttention(
+    normalizedRepositories: readonly NormalizedRepositoryResult[],
+  ): ProjectAttentionSummary {
+    const hasKnownCi = normalizedRepositories.some((r) => r.ciState !== 'unknown');
+    const failingCiCount = normalizedRepositories.filter((r) => r.ciState === 'failure').length;
+    const failingCi = failingCiCount > 0 ? failingCiCount : hasKnownCi ? 0 : null;
+
+    const hasUnknownPr = normalizedRepositories.some((r) => r.openPrCount === null);
+    const openPullRequests = hasUnknownPr
+      ? null
+      : normalizedRepositories.reduce((sum, r) => sum + (r.openPrCount ?? 0), 0);
+
+    const hasUnknownIssues = normalizedRepositories.some((r) => r.attentionIssueCount === null);
+    const attentionIssues = hasUnknownIssues
+      ? null
+      : normalizedRepositories.reduce((sum, r) => sum + (r.attentionIssueCount ?? 0), 0);
+
+    const attentionIssuesHasMore = normalizedRepositories.some((r) => r.attentionIssueHasMore);
+
+    return {
+      failingCi,
+      openPullRequests,
+      attentionIssues,
+      attentionIssuesHasMore,
+    };
+  }
+
+  private computeFreshness(
+    normalizedRepositories: readonly NormalizedRepositoryResult[],
+  ): GitHubFreshness {
+    if (normalizedRepositories.some((r) => r.freshness === 'unavailable')) {
+      return normalizedRepositories.every((r) => r.freshness === 'unavailable')
+        ? 'unavailable'
+        : 'partial';
+    } else if (normalizedRepositories.some((r) => r.freshness === 'stale')) {
+      return 'stale';
+    } else if (normalizedRepositories.some((r) => r.freshness === 'partial')) {
+      return 'partial';
+    }
+    return 'fresh';
+  }
+
+  async isRepositoryConfigured(owner: string, repo: string): Promise<boolean> {
+    const targetKey = `${owner.toLowerCase()}/${repo.toLowerCase()}`;
+    const projects = await this.store.listProjects({ configuredOnly: true });
+    return projects.some((p) =>
+      p.repositories.some((r) => `${r.owner.toLowerCase()}/${r.name.toLowerCase()}` === targetKey),
+    );
   }
 
   async start(): Promise<void> {
@@ -95,6 +165,154 @@ export class ProjectService {
     this.logger?.info('projects.service.stopped');
   }
 
+  async refreshRepository(owner: string, repo: string): Promise<void> {
+    if (this.stopped) {
+      return;
+    }
+
+    const targetKey = `${owner.toLowerCase()}/${repo.toLowerCase()}`;
+    const projects = await this.store.listProjects({ configuredOnly: true });
+    const matchingProjects = projects.filter((p) =>
+      p.repositories.some((r) => `${r.owner.toLowerCase()}/${r.name.toLowerCase()}` === targetKey),
+    );
+
+    if (matchingProjects.length === 0) {
+      return;
+    }
+
+    // Check rate limit
+    const rateLimit = await this.adapter.getRateLimit();
+    if (rateLimit && rateLimit.remaining === 0) {
+      const resetTime = Date.parse(rateLimit.resetAt);
+      if (resetTime > Date.now()) {
+        this.logger?.warn('projects.targeted_refresh.rate_limited', {
+          metadata: { repository: `${owner}/${repo}`, resetAt: rateLimit.resetAt },
+        });
+        return;
+      }
+    }
+
+    // Cache collection promise across projects with the same attention labels to avoid duplicate GitHub API calls
+    const collectionCache = new Map<string, Promise<NormalizedRepositoryResult>>();
+
+    for (const project of matchingProjects) {
+      if (this.stopped) break;
+
+      await this.withProjectLock(project.id, async () => {
+        const previousSnapshot = await this.store.getLatestGitHubSnapshot(project.id);
+        const previousRepoMap = new Map<string, NormalizedRepositoryResult>();
+        if (previousSnapshot) {
+          for (const r of previousSnapshot.data.repositories) {
+            previousRepoMap.set(`${r.owner.toLowerCase()}/${r.name.toLowerCase()}`, r);
+          }
+        }
+
+        const targetRepoConfig = project.repositories.find(
+          (r) => `${r.owner.toLowerCase()}/${r.name.toLowerCase()}` === targetKey,
+        )!;
+
+        const labelsKey = [...project.attentionLabels].sort().join(',');
+        let collectionPromise = collectionCache.get(labelsKey);
+        if (!collectionPromise) {
+          collectionPromise = this.adapter.collectRepository(
+            {
+              owner: targetRepoConfig.owner,
+              name: targetRepoConfig.name,
+              primary: targetRepoConfig.primary,
+              attentionLabels: project.attentionLabels,
+            },
+            previousRepoMap.get(targetKey),
+          );
+          collectionCache.set(labelsKey, collectionPromise);
+        }
+
+        let updatedResult: NormalizedRepositoryResult;
+        try {
+          updatedResult = await collectionPromise;
+        } catch (error) {
+          this.logger?.warn('projects.repository.collection_failed', {
+            metadata: {
+              projectId: project.id,
+              owner: targetRepoConfig.owner,
+              name: targetRepoConfig.name,
+              error: error instanceof Error ? error.message : 'Unknown error',
+            },
+          });
+          const previousResult = previousRepoMap.get(targetKey);
+          updatedResult = previousResult
+            ? { ...previousResult, freshness: 'stale' }
+            : {
+                owner: targetRepoConfig.owner,
+                name: targetRepoConfig.name,
+                primary: targetRepoConfig.primary,
+                snapshot: null,
+                ciState: 'unknown',
+                latestCi: null,
+                openPullRequests: [],
+                attentionIssues: [],
+                openPrCount: null,
+                openPrHasMore: false,
+                openIssueCount: null,
+                openIssueHasMore: false,
+                attentionIssueCount: null,
+                attentionIssueHasMore: false,
+                freshness: 'unavailable',
+              };
+        }
+
+        const finalRepoResult: NormalizedRepositoryResult = {
+          ...updatedResult,
+          primary: targetRepoConfig.primary,
+        };
+
+        const normalizedRepositories: NormalizedRepositoryResult[] = project.repositories.map(
+          (repoConfig) => {
+            const key = `${repoConfig.owner.toLowerCase()}/${repoConfig.name.toLowerCase()}`;
+            if (key === targetKey) {
+              return finalRepoResult;
+            }
+            return (
+              previousRepoMap.get(key) ?? {
+                owner: repoConfig.owner,
+                name: repoConfig.name,
+                primary: repoConfig.primary,
+                snapshot: null,
+                ciState: 'unknown',
+                latestCi: null,
+                openPullRequests: [],
+                attentionIssues: [],
+                openPrCount: null,
+                openPrHasMore: false,
+                openIssueCount: null,
+                openIssueHasMore: false,
+                attentionIssueCount: null,
+                attentionIssueHasMore: false,
+                freshness: 'unavailable',
+              }
+            );
+          },
+        );
+
+        const attention = this.computeAttention(normalizedRepositories);
+        const overallFreshness = this.computeFreshness(normalizedRepositories);
+
+        const snapshotRecord: PersistedGitHubSnapshot = {
+          id: randomUUID(),
+          projectId: project.id,
+          collectedAt: new Date().toISOString(),
+          freshness: overallFreshness,
+          data: {
+            repositories: normalizedRepositories,
+            attention,
+          },
+          createdAt: new Date().toISOString(),
+        };
+
+        await this.store.saveGitHubSnapshot(snapshotRecord);
+      });
+    }
+  }
+
   async refresh(): Promise<void> {
     if (this.refreshing || this.stopped) {
       return;
@@ -127,112 +345,85 @@ export class ProjectService {
       for (const project of projects) {
         if (this.stopped) break;
 
-        const previousSnapshot = await this.store.getLatestGitHubSnapshot(project.id);
-        const previousRepoMap = new Map<string, NormalizedRepositoryResult>();
-        if (previousSnapshot) {
-          for (const repo of previousSnapshot.data.repositories) {
-            previousRepoMap.set(`${repo.owner.toLowerCase()}/${repo.name.toLowerCase()}`, repo);
-          }
-        }
-
-        const normalizedRepositories: NormalizedRepositoryResult[] = [];
-
-        for (const repo of project.repositories) {
-          const key = `${repo.owner.toLowerCase()}/${repo.name.toLowerCase()}`;
-          const previousResult = previousRepoMap.get(key);
-
-          try {
-            const result = await this.adapter.collectRepository(
-              {
-                owner: repo.owner,
-                name: repo.name,
-                primary: repo.primary,
-                attentionLabels: project.attentionLabels,
-              },
-              previousResult,
-            );
-            normalizedRepositories.push(result);
-          } catch (error) {
-            this.logger?.warn('projects.repository.collection_failed', {
-              metadata: {
-                projectId: project.id,
-                owner: repo.owner,
-                name: repo.name,
-                error: error instanceof Error ? error.message : 'Unknown error',
-              },
-            });
-            if (previousResult) {
-              normalizedRepositories.push({
-                ...previousResult,
-                freshness: 'stale',
-              });
-            } else {
-              normalizedRepositories.push({
-                owner: repo.owner,
-                name: repo.name,
-                primary: repo.primary,
-                snapshot: null,
-                ciState: 'unknown',
-                latestCi: null,
-                openPullRequests: [],
-                attentionIssues: [],
-                openPrCount: null,
-                openPrHasMore: false,
-                openIssueCount: null,
-                openIssueHasMore: false,
-                attentionIssueCount: null,
-                freshness: 'unavailable',
-              });
+        await this.withProjectLock(project.id, async () => {
+          const previousSnapshot = await this.store.getLatestGitHubSnapshot(project.id);
+          const previousRepoMap = new Map<string, NormalizedRepositoryResult>();
+          if (previousSnapshot) {
+            for (const repo of previousSnapshot.data.repositories) {
+              previousRepoMap.set(`${repo.owner.toLowerCase()}/${repo.name.toLowerCase()}`, repo);
             }
           }
-        }
 
-        // Aggregate project attention metrics honestly: unknown is not zero
-        const hasKnownCi = normalizedRepositories.some((r) => r.ciState !== 'unknown');
-        const failingCiCount = normalizedRepositories.filter((r) => r.ciState === 'failure').length;
-        const failingCi = failingCiCount > 0 ? failingCiCount : hasKnownCi ? 0 : null;
+          const normalizedRepositories: NormalizedRepositoryResult[] = [];
 
-        const hasUnknownPr = normalizedRepositories.some((r) => r.openPrCount === null);
-        const openPullRequests = hasUnknownPr
-          ? null
-          : normalizedRepositories.reduce((sum, r) => sum + (r.openPrCount ?? 0), 0);
+          for (const repo of project.repositories) {
+            const key = `${repo.owner.toLowerCase()}/${repo.name.toLowerCase()}`;
+            const previousResult = previousRepoMap.get(key);
 
-        const hasUnknownIssues = normalizedRepositories.some((r) => r.attentionIssueCount === null);
-        const attentionIssues = hasUnknownIssues
-          ? null
-          : normalizedRepositories.reduce((sum, r) => sum + (r.attentionIssueCount ?? 0), 0);
+            try {
+              const result = await this.adapter.collectRepository(
+                {
+                  owner: repo.owner,
+                  name: repo.name,
+                  primary: repo.primary,
+                  attentionLabels: project.attentionLabels,
+                },
+                previousResult,
+              );
+              normalizedRepositories.push(result);
+            } catch (error) {
+              this.logger?.warn('projects.repository.collection_failed', {
+                metadata: {
+                  projectId: project.id,
+                  owner: repo.owner,
+                  name: repo.name,
+                  error: error instanceof Error ? error.message : 'Unknown error',
+                },
+              });
+              if (previousResult) {
+                normalizedRepositories.push({
+                  ...previousResult,
+                  freshness: 'stale',
+                });
+              } else {
+                normalizedRepositories.push({
+                  owner: repo.owner,
+                  name: repo.name,
+                  primary: repo.primary,
+                  snapshot: null,
+                  ciState: 'unknown',
+                  latestCi: null,
+                  openPullRequests: [],
+                  attentionIssues: [],
+                  openPrCount: null,
+                  openPrHasMore: false,
+                  openIssueCount: null,
+                  openIssueHasMore: false,
+                  attentionIssueCount: null,
+                  attentionIssueHasMore: false,
+                  freshness: 'unavailable',
+                });
+              }
+            }
+          }
 
-        const attention: ProjectAttentionSummary = {
-          failingCi,
-          openPullRequests,
-          attentionIssues,
-        };
+          const attention = this.computeAttention(normalizedRepositories);
+          const overallFreshness = this.computeFreshness(normalizedRepositories);
 
-        // Determine overall project freshness
-        let overallFreshness: GitHubFreshness = 'fresh';
-        if (normalizedRepositories.some((r) => r.freshness === 'unavailable')) {
-          overallFreshness = normalizedRepositories.every((r) => r.freshness === 'unavailable')
-            ? 'unavailable'
-            : 'partial';
-        } else if (normalizedRepositories.some((r) => r.freshness === 'stale')) {
-          overallFreshness = 'stale';
-        } else if (normalizedRepositories.some((r) => r.freshness === 'partial')) {
-          overallFreshness = 'partial';
-        }
+          const snapshotRecord: PersistedGitHubSnapshot = {
+            id: randomUUID(),
+            projectId: project.id,
+            collectedAt: new Date().toISOString(),
+            freshness: overallFreshness,
+            data: {
+              repositories: normalizedRepositories,
+              attention,
+            },
+            createdAt: new Date().toISOString(),
+          };
 
-        const snapshotRecord: PersistedGitHubSnapshot = {
-          id: randomUUID(),
-          projectId: project.id,
-          collectedAt: new Date().toISOString(),
-          freshness: overallFreshness,
-          data: {
-            repositories: normalizedRepositories,
-            attention,
-          },
-          createdAt: new Date().toISOString(),
-        };
-
-        await this.store.saveGitHubSnapshot(snapshotRecord);
+          await this.store.saveGitHubSnapshot(snapshotRecord);
+        });
       }
 
       this.lastRefreshedAt = new Date().toISOString();
@@ -327,6 +518,7 @@ export class ProjectService {
         openIssueCount: repoData ? repoData.openIssueCount : null,
         openIssueHasMore: repoData?.openIssueHasMore ?? false,
         attentionIssueCount: repoData ? repoData.attentionIssueCount : null,
+        attentionIssueHasMore: repoData?.attentionIssueHasMore ?? false,
         freshness,
         error: repoData?.error ?? null,
       };
@@ -338,6 +530,7 @@ export class ProjectService {
       failingCi: null,
       openPullRequests: null,
       attentionIssues: null,
+      attentionIssuesHasMore: false,
     };
 
     const freshness: GitHubFreshness = !sourceHealth.configured

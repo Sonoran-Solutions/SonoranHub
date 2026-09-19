@@ -251,19 +251,33 @@ as the durable source of truth, without creating duplicate editable state.
 - [x] Project cockpit works on desktop and mobile.
 - [x] All GitHub integration operations are strictly read-only.
 
-### Phase 2B — GitHub webhook ingestion and real-time events (Deferred)
+### Phase 2B — Signed GitHub Webhook Ingestion & Targeted Reconciliation (Implemented)
 
 #### Goal
 
-Receive real-time GitHub webhook notifications rather than relying solely on polling,
-and emit normalized internal events for project/repository updates.
+Receive real-time GitHub webhook notifications rather than relying solely on periodic polling,
+coalesce rapid updates, and trigger targeted reconciliation via authoritative GitHub read APIs
+without turning webhook payloads into a second source of truth.
 
 #### Work
 
-- Implement GitHub webhook signature verification (`X-Hub-Signature-256`).
-- Ingest webhook events (`push`, `pull_request`, `check_run`, `issues`).
-- Invalidate and refresh repository snapshot cache on incoming events.
-- Broadcast normalized project update events to connected UI clients.
+- [x] Implement timing-safe raw-body HMAC-SHA256 signature verification (`X-Hub-Signature-256`) against `GITHUB_WEBHOOK_SECRET` in `apps/api/src/webhookSignature.ts`.
+- [x] Parse exact raw request bytes before JSON decoding; reject payloads > 1 MiB with Fastify HTTP 413.
+- [x] Store webhook delivery audit records in PostgreSQL (`github_webhook_deliveries` in `db/migrations/006_github_webhook_deliveries.sql`) and in-memory store for test/offline use.
+- [x] Atomic delivery deduplication (`ON CONFLICT (delivery_id) DO NOTHING RETURNING delivery_id`) preventing replayed deliveries from enqueueing redundant reconciliation.
+- [x] Keyed refresh coordination (`GitHubRefreshCoordinator`) with configurable debounce (500–1500ms), burst coalescing, and dirty follow-up scheduling during in-flight refreshes.
+- [x] Targeted repository reconciliation (`ProjectService.refreshRepository`) serialized per-project via FIFO locks (`withProjectLock`), preserving unaffected repository snapshots and rate limit backoffs.
+- [x] Automated retention management (`createWebhookRetentionManager`) pruning delivery records older than `GITHUB_WEBHOOK_DELIVERY_RETENTION_HOURS` (default 72h).
+- [x] Update attention issue counting to evaluate all fetched items on the page, keep item list bounded, and signal `attentionIssueHasMore` / `attentionIssuesHasMore` in UI (`3+`).
+- [x] End-to-end smoke verification script `pnpm smoke:github-webhook` testing missing/bad signatures, pings, unhandled events, push events, deduplication, and targeted reconciliation.
+
+#### Exit criteria
+
+- [x] Webhook payload verification is constant-time and strictly precedes JSON parsing.
+- [x] Webhook payloads are never persisted as project truth or executed as commands.
+- [x] Rapid bursts coalesce cleanly into single debounced read-API refreshes.
+- [x] Periodic polling (`GITHUB_REFRESH_INTERVAL_MS`) remains active as durable fallback.
+- [x] Web UI correctly displays bounded attention counters (`3+`).
 
 ---
 
