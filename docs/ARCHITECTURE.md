@@ -330,18 +330,65 @@ Do not prematurely model every provider field as a database column. Store normal
 
 ## 9. GitHub integration
 
-GitHub remains durable code/project state. Hub should use a GitHub App where practical for:
+GitHub remains durable code/project state. Hub uses a GitHub App integration
+for repository discovery, status, issues, pull requests, and CI/Actions state.
 
-- repository discovery;
-- issues;
-- pull requests;
-- Actions/CI state;
-- webhooks;
-- creating task-related issues/PRs when requested.
+### Phase 2A read-only project control plane
 
-Hub's project record should reference repositories rather than duplicating repository history.
+Phase 2A implements the read-only GitHub integration boundary, project/repository
+storage, and project cockpit UI:
 
-Incoming GitHub webhooks should become normalized events and update project/task views.
+```text
+config/projects.json (or SONORAN_PROJECTS_PATH)
+  ↓
+ProjectService (API startup sync)
+  ↓
+PostgresProjectStore (projects, project_repositories, project_github_snapshots)
+  ↓
+GitHubAdapter (packages/github)
+  ↓
+GitHubAppProjectSource (Octokit GitHub App auth via app ID + private key)
+  ↓
+Fastify GET /projects and GET /projects/:projectId
+  ↓
+React UI (/projects, /projects/:projectId cockpit, Home attention card)
+```
+
+#### Read-only enforcement
+
+The integration boundary (`packages/github`) asserts read-only operation at
+runtime via `assertReadOnly()`. No mutating GitHub endpoints (creating/updating
+issues, pull requests, comments, checks, or ref updates) are exposed or callable
+by the adapter.
+
+#### CI status aggregation
+
+The adapter queries both check runs and commit statuses for default branches and
+open pull requests. The aggregated status follows strict precedence:
+
+`failure` > `pending` > `success` > `neutral` > `unknown`
+
+Any failing check or status marks the overall status as `failure`. In-progress or
+queued checks without failure mark the status as `pending`. When all checks
+succeed, the status is `success`.
+
+#### Partial failure resilience
+
+Each configured repository within a multi-repository project is queried
+independently. If one repository encounters a rate-limit or network error, its
+snapshot records a localized error while the remaining repositories succeed. The
+project snapshot as a whole remains available.
+
+#### Storage and lifecycle
+
+Projects and repository mappings are synchronized to PostgreSQL tables
+(`projects`, `project_repositories`) at API startup based on `config/projects.json`.
+Snapshot data is cached in `project_github_snapshots` with a configurable TTL.
+When GitHub credentials are unconfigured, `UnconfiguredGitHubProjectSource` returns
+safe stub snapshots, allowing Hub API and UI to operate seamlessly without crashes.
+
+Incoming GitHub webhooks (Phase 2B) and task/issue/PR mutation (Phase 3) remain
+deferred.
 
 ## 10. AI capacity architecture
 

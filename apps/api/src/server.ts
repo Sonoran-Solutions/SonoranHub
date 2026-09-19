@@ -3,6 +3,7 @@ import { createCapacityRuntime } from './capacity.js';
 import { parseAllowedOrigins } from './cors.js';
 import { PostgresMachineStore } from './machines.js';
 import { PostgresMachineActionStore } from './actions.js';
+import { createProjectsRuntime } from './projects.js';
 import { createStructuredLogger, loadConfig } from '@sonoran-hub/config';
 import pg from 'pg';
 
@@ -16,8 +17,15 @@ const capacity = createCapacityRuntime({ environment: process.env, config, logge
 const machinePool = process.env.DATABASE_URL?.trim()
   ? new Pool({ connectionString: process.env.DATABASE_URL })
   : undefined;
+const projects = createProjectsRuntime({
+  environment: process.env,
+  config,
+  logger,
+  pool: machinePool,
+});
 const app = buildApp(config, {
   capacityService: capacity.service,
+  projectService: projects.service,
   allowedOrigins: parseAllowedOrigins(process.env.WEB_ORIGIN),
   machineStore: machinePool ? new PostgresMachineStore(machinePool) : undefined,
   machineActionStore: machinePool ? new PostgresMachineActionStore(machinePool) : undefined,
@@ -25,12 +33,14 @@ const app = buildApp(config, {
 });
 
 app.addHook('onClose', async () => {
+  projects.stop();
   await capacity.stop();
   await machinePool?.end();
 });
 
 try {
   await app.listen({ host, port });
+  await projects.start();
   await capacity.start();
   let shuttingDown = false;
   const shutdown = async () => {
@@ -47,6 +57,7 @@ try {
   process.once('SIGTERM', () => void shutdown());
 } catch {
   logger.error('api.start_failed', { metadata: { error: 'API startup failed' } });
+  projects.stop();
   await capacity.stop();
   await machinePool?.end();
   process.exitCode = 1;

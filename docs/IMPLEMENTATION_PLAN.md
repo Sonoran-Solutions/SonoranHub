@@ -224,31 +224,46 @@ Git mutation, root/system services, and machine power control remain deferred.
 
 ## Phase 2 — GitHub/project control plane
 
-### Goal
+### Phase 2A — Read-only GitHub project control plane (Implemented)
 
-Make Hub useful for navigating the existing Sonoran Solutions project portfolio without creating a duplicate source of truth.
+#### Goal
 
-### Work
+Make Hub useful for navigating the Sonoran Solutions project portfolio using GitHub
+as the durable source of truth, without creating duplicate editable state.
 
-- Implement GitHub App/integration setup.
-- Discover configured organization/user repositories.
-- Add `projects` that reference one or more GitHub repositories.
-- Build project overview with:
-  - default branch;
-  - recent activity;
-  - open PRs;
-  - issues requiring attention;
-  - latest CI/Actions state.
-- Receive relevant GitHub webhooks instead of excessive polling.
-- Add stable mapping between Hub task IDs and GitHub issue/PR links.
-- Add explicit actions to create an issue or PR when task workflow requires it.
+#### Work
 
-### Exit criteria
+- [x] Implement read-only GitHub integration adapter (`packages/github`) with strict runtime assertions preventing mutation.
+- [x] Authenticate using GitHub App (`@octokit/auth-app`) with support for PEM key files, strings, and custom base URLs.
+- [x] Configure projects and repositories via `config/projects.json` with schema validation and `SONORAN_PROJECTS_PATH` override.
+- [x] Persist project and repository configuration to PostgreSQL (`projects`, `project_repositories`, `project_github_snapshots` in `db/migrations/005_projects.sql`).
+- [x] Aggregate CI/Actions check runs and commit statuses with deterministic priority (`failure` > `pending` > `success` > `neutral` > `unknown`).
+- [x] Implement partial failure resilience: errors in one repository do not break project snapshots.
+- [x] Graceful degradation: unconfigured GitHub credentials render safe stubs without failing API startup or breaking the UI.
+- [x] Expose `GET /projects` and `GET /projects/:projectId` from Fastify API.
+- [x] Build responsive desktop and mobile web UI: Projects list (`/projects`), Project detail cockpit (`/projects/:projectId`), and Home Attention Card.
+- [x] Add opt-in read-only smoke script `pnpm smoke:github`.
 
-- Core Sonoran Solutions repos are navigable in Hub.
-- PR/CI state updates promptly through webhooks/poll fallback.
-- Hub does not duplicate full issue/PR bodies as independent editable truth.
-- Project cockpit works on mobile.
+#### Exit criteria
+
+- [x] Sonoran Solutions projects and repositories are navigable in Hub.
+- [x] Hub does not duplicate full issue/PR bodies as independent editable truth.
+- [x] Project cockpit works on desktop and mobile.
+- [x] All GitHub integration operations are strictly read-only.
+
+### Phase 2B — GitHub webhook ingestion and real-time events (Deferred)
+
+#### Goal
+
+Receive real-time GitHub webhook notifications rather than relying solely on polling,
+and emit normalized internal events for project/repository updates.
+
+#### Work
+
+- Implement GitHub webhook signature verification (`X-Hub-Signature-256`).
+- Ingest webhook events (`push`, `pull_request`, `check_run`, `issues`).
+- Invalidate and refresh repository snapshot cache on incoming events.
+- Broadcast normalized project update events to connected UI clients.
 
 ---
 

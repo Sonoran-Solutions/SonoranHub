@@ -8,6 +8,10 @@ import type {
   MachineActionRecord,
   MachineSummary,
   MachinesResponse,
+  ProjectDetail,
+  ProjectDetailResponse,
+  ProjectSummary,
+  ProjectsResponse,
 } from '@sonoran-hub/contracts';
 
 import {
@@ -32,10 +36,22 @@ import {
   type CapacityState,
 } from './capacityViewModel.js';
 
+import {
+  ciStateBadge,
+  createResourcePoller,
+  formatRelativeTime,
+  freshnessBadge,
+  initialProjectDetailState,
+  initialProjectsState,
+  isSafeGitHubUrl,
+  type ProjectDetailState,
+  type ProjectsState,
+} from './projectsViewModel.js';
+
 const sections = [
   { label: 'Dashboard', href: '/' },
   { label: 'AI Capacity', href: '/capacity' },
-  { label: 'Projects', href: '/#Projects' },
+  { label: 'Projects', href: '/projects' },
   { label: 'Machines', href: '/machines' },
   { label: 'Tasks', href: '/#Tasks' },
 ];
@@ -89,17 +105,22 @@ export function App() {
           <CapacityPage />
         ) : path === '/machines' ? (
           <MachinesPage />
+        ) : path === '/projects' ? (
+          <ProjectsPage onNavigate={onNavigate} />
+        ) : path.startsWith('/projects/') ? (
+          <ProjectDetailPage onNavigate={onNavigate} projectId={path.slice('/projects/'.length)} />
         ) : (
-          <HomePage />
+          <HomePage onNavigate={onNavigate} />
         )}
       </div>
     </div>
   );
 }
 
-function HomePage() {
+function HomePage({ onNavigate }: { onNavigate: (event: MouseEvent<HTMLAnchorElement>) => void }) {
   const capacity = useCapacity();
   const machines = useMachines();
+  const projects = useProjects();
   return (
     <main className="content">
       <section className="hero">
@@ -109,6 +130,18 @@ function HomePage() {
           Sonoran Hub is the control plane for Sonoran Solutions development workflows. Capacity is
           the first live surface, with provider credentials kept entirely on the API.
         </p>
+      </section>
+      <section aria-labelledby="home-projects-title" className="home-projects">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Portfolio</p>
+            <h2 id="home-projects-title">Projects</h2>
+          </div>
+          <a className="text-link" href="/projects" onClick={onNavigate}>
+            Open full view →
+          </a>
+        </div>
+        <HomeProjectSummary onNavigate={onNavigate} state={projects} />
       </section>
       <section aria-labelledby="home-capacity-title" className="home-capacity">
         <div className="section-heading">
@@ -871,4 +904,768 @@ function formatMachineAge(value: string): string {
   if (seconds < 10) return 'just now';
   if (seconds < 60) return `${seconds}s ago`;
   return `${Math.floor(seconds / 60)}m ago`;
+}
+
+function HomeProjectSummary({
+  state,
+  onNavigate,
+}: {
+  state: ProjectsState;
+  onNavigate: (event: MouseEvent<HTMLAnchorElement>) => void;
+}) {
+  if (state.status === 'loading') return <div className="state-panel">Loading projects…</div>;
+  if (state.status === 'error') {
+    return <div className="state-panel state-error">Project data is unavailable.</div>;
+  }
+  const projects = state.data?.projects ?? [];
+  if (projects.length === 0) {
+    return <div className="state-panel">No projects configured.</div>;
+  }
+
+  const failingCi = projects.reduce((sum, p) => sum + p.attention.failingCi, 0);
+  const openPrs = projects.reduce((sum, p) => sum + p.attention.openPullRequests, 0);
+  const attentionIssues = projects.reduce((sum, p) => sum + p.attention.attentionIssues, 0);
+
+  const allFresh = projects.every((p) => p.freshness === 'fresh');
+  const anyStaleOrUnavailable = projects.some(
+    (p) => p.freshness === 'stale' || p.freshness === 'unavailable',
+  );
+
+  return (
+    <>
+      {state.refreshError ? (
+        <p className="refresh-status" role="status">
+          Showing the last successful project update. Refresh failed.
+        </p>
+      ) : null}
+      {!state.data?.sourceHealth.configured ? (
+        <p className="refresh-status">
+          GitHub integration unconfigured. Displaying configured repositories in offline mode.
+        </p>
+      ) : null}
+      <div className="home-attention-card">
+        {allFresh && failingCi === 0 && attentionIssues === 0 ? (
+          <div className="home-healthy-banner">All configured projects healthy</div>
+        ) : (
+          <div className="home-attention-metrics">
+            <span className={`metric-pill ${failingCi > 0 ? 'metric-pill-danger' : ''}`}>
+              <strong>{failingCi}</strong> failing CI
+            </span>
+            <span className="metric-pill">
+              <strong>{openPrs}</strong> open PRs
+            </span>
+            <span className={`metric-pill ${attentionIssues > 0 ? 'metric-pill-warning' : ''}`}>
+              <strong>{attentionIssues}</strong> attention issues
+            </span>
+            {anyStaleOrUnavailable ? (
+              <span className="metric-pill metric-pill-muted">
+                GitHub state is stale/unavailable
+              </span>
+            ) : null}
+          </div>
+        )}
+      </div>
+      <div className="home-project-list">
+        {projects.slice(0, 3).map((project) => {
+          const ci = ciStateBadge(project.primaryRepository?.ciState ?? 'unknown');
+          return (
+            <div className="home-project-row" key={project.id}>
+              <div>
+                <a
+                  className="project-title-link"
+                  href={`/projects/${project.id}`}
+                  onClick={onNavigate}
+                >
+                  <strong>{project.name}</strong>
+                </a>
+                <span className="muted">
+                  {' · '}
+                  {project.primaryRepository?.owner}/{project.primaryRepository?.name}
+                </span>
+              </div>
+              <div className="home-project-row-badges">
+                <span className={ci.className}>{ci.label}</span>
+                <span className="muted">
+                  {project.attention.openPullRequests} PRs · Updated{' '}
+                  {formatRelativeTime(project.lastFetchedAt)}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+function ProjectsPage({
+  onNavigate,
+}: {
+  onNavigate: (event: MouseEvent<HTMLAnchorElement>) => void;
+}) {
+  const state = useProjects();
+  return (
+    <main className="content">
+      <section className="page-heading">
+        <div>
+          <p className="eyebrow">Portfolio</p>
+          <h2>Projects</h2>
+          <p>Sonoran Solutions repositories tracked with GitHub as the durable source of truth.</p>
+        </div>
+        <span className="updated">Hub polls every 15s</span>
+      </section>
+
+      {state.status === 'loading' ? <div className="state-panel">Loading projects…</div> : null}
+      {state.status === 'error' ? (
+        <div className="state-panel state-error" role="alert">
+          <strong>Project API unavailable</strong>
+          <span>{state.message}</span>
+        </div>
+      ) : null}
+      {state.status === 'success' && state.data && !state.data.sourceHealth.configured ? (
+        <div className="state-panel">
+          GitHub App credentials are not configured on the Hub API. Showing configured projects with
+          offline status.
+        </div>
+      ) : null}
+      {state.status === 'success' && state.refreshError ? (
+        <p className="refresh-status" role="status">
+          Showing the last successful project update. Refresh failed: {state.refreshError}
+        </p>
+      ) : null}
+      {state.status === 'success' && state.data ? (
+        <section className="project-grid">
+          {state.data.projects.map((project) => (
+            <ProjectCard key={project.id} onNavigate={onNavigate} project={project} />
+          ))}
+        </section>
+      ) : null}
+    </main>
+  );
+}
+
+function ProjectCard({
+  project,
+  onNavigate,
+}: {
+  project: ProjectSummary;
+  onNavigate: (event: MouseEvent<HTMLAnchorElement>) => void;
+}) {
+  const primaryRepo = project.primaryRepository;
+  const ci = ciStateBadge(primaryRepo?.ciState ?? 'unknown');
+  const freshness = freshnessBadge(project.freshness);
+
+  return (
+    <article className="project-card">
+      <header className="project-card-heading">
+        <div>
+          <h3>
+            <a href={`/projects/${project.id}`} onClick={onNavigate}>
+              {project.name}
+            </a>
+          </h3>
+          <p className="project-repo-slug">
+            {primaryRepo
+              ? `${primaryRepo.owner}/${primaryRepo.name}`
+              : 'No repositories configured'}
+          </p>
+        </div>
+        <div className="project-badges">
+          <span className={freshness.className}>{freshness.label}</span>
+          <span className={ci.className}>{ci.label}</span>
+        </div>
+      </header>
+      {project.description ? <p className="project-description">{project.description}</p> : null}
+      <div className="project-card-metrics">
+        <div>
+          <small className="muted">Pull requests</small>
+          <strong>{project.attention.openPullRequests} open</strong>
+        </div>
+        <div>
+          <small className="muted">Issues</small>
+          <strong>
+            {primaryRepo?.openIssueCount ?? 0} open
+            {project.attention.attentionIssues > 0 ? (
+              <span className="attention-tag">
+                {' '}
+                ({project.attention.attentionIssues} attention)
+              </span>
+            ) : null}
+          </strong>
+        </div>
+        <div>
+          <small className="muted">Default branch</small>
+          <strong>{primaryRepo?.snapshot?.defaultBranch ?? 'main'}</strong>
+        </div>
+        <div>
+          <small className="muted">Updated</small>
+          <strong>{formatRelativeTime(project.lastFetchedAt)}</strong>
+        </div>
+      </div>
+      <footer className="project-card-footer">
+        <a className="button" href={`/projects/${project.id}`} onClick={onNavigate}>
+          Open Cockpit →
+        </a>
+      </footer>
+    </article>
+  );
+}
+
+function ProjectDetailPage({
+  projectId,
+  onNavigate,
+}: {
+  projectId: string;
+  onNavigate: (event: MouseEvent<HTMLAnchorElement>) => void;
+}) {
+  const state = useProjectDetail(projectId);
+  const [activeTab, setActiveTab] = useState<
+    'overview' | 'github' | 'tasks' | 'builds' | 'docs' | 'activity'
+  >('overview');
+
+  if (state.status === 'loading') {
+    return (
+      <main className="content">
+        <div className="state-panel">Loading project cockpit…</div>
+      </main>
+    );
+  }
+
+  if (state.status === 'error' || !state.data) {
+    return (
+      <main className="content">
+        <nav aria-label="Breadcrumb" className="breadcrumb">
+          <a href="/projects" onClick={onNavigate}>
+            ← Back to Projects
+          </a>
+        </nav>
+        <div className="state-panel state-error" role="alert">
+          <strong>Project cockpit unavailable</strong>
+          <span>{state.message ?? 'Project could not be loaded.'}</span>
+        </div>
+      </main>
+    );
+  }
+
+  const { project, sourceHealth } = state.data;
+  const primaryRepo = project.primaryRepository;
+  const freshness = freshnessBadge(project.freshness);
+  const ci = ciStateBadge(primaryRepo?.ciState ?? 'unknown');
+
+  const tabs: Array<{ id: typeof activeTab; label: string }> = [
+    { id: 'overview', label: 'Overview' },
+    { id: 'github', label: 'GitHub' },
+    { id: 'tasks', label: 'Tasks' },
+    { id: 'builds', label: 'Builds' },
+    { id: 'docs', label: 'Docs' },
+    { id: 'activity', label: 'Activity' },
+  ];
+
+  return (
+    <main className="content cockpit">
+      <nav aria-label="Breadcrumb" className="breadcrumb">
+        <a href="/projects" onClick={onNavigate}>
+          Projects
+        </a>
+        <span className="breadcrumb-separator">/</span>
+        <span>{project.name}</span>
+      </nav>
+
+      <header className="cockpit-header">
+        <div>
+          <div className="cockpit-title-row">
+            <h2>{project.name}</h2>
+            <span className={freshness.className}>{freshness.label}</span>
+            <span className={ci.className}>{ci.label}</span>
+          </div>
+          {project.description ? (
+            <p className="cockpit-description">{project.description}</p>
+          ) : null}
+          {primaryRepo ? (
+            <p className="cockpit-meta">
+              Primary repository:{' '}
+              {primaryRepo.snapshot?.url && isSafeGitHubUrl(primaryRepo.snapshot.url) ? (
+                <a
+                  className="external-link"
+                  href={primaryRepo.snapshot.url}
+                  rel="noreferrer noopener"
+                  target="_blank"
+                >
+                  {primaryRepo.owner}/{primaryRepo.name} ↗
+                </a>
+              ) : (
+                <span>
+                  {primaryRepo.owner}/{primaryRepo.name}
+                </span>
+              )}
+              {' · '}
+              Branch: <strong>{primaryRepo.snapshot?.defaultBranch ?? 'main'}</strong>
+              {' · '}
+              Updated: <strong>{formatRelativeTime(project.lastFetchedAt)}</strong>
+            </p>
+          ) : null}
+        </div>
+      </header>
+
+      {project.attention.failingCi > 0 || project.attention.attentionIssues > 0 ? (
+        <div className="attention-banner" role="alert">
+          <strong>Attention required:</strong>{' '}
+          {project.attention.failingCi > 0
+            ? `${project.attention.failingCi} failing CI checks. `
+            : ''}
+          {project.attention.attentionIssues > 0
+            ? `${project.attention.attentionIssues} issues flagged for attention.`
+            : ''}
+        </div>
+      ) : null}
+
+      {!sourceHealth.configured ? (
+        <div className="state-panel">
+          GitHub App credentials are not configured. Showing offline metadata.
+        </div>
+      ) : null}
+
+      <div className="cockpit-tabs" role="tablist">
+        {tabs.map((tab) => (
+          <button
+            className={activeTab === tab.id ? 'cockpit-tab active' : 'cockpit-tab'}
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            role="tab"
+            type="button"
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="cockpit-body">
+        {activeTab === 'overview' ? (
+          <OverviewTab project={project} />
+        ) : activeTab === 'github' ? (
+          <GitHubTab project={project} />
+        ) : (
+          <PlaceholderTab tabName={tabs.find((t) => t.id === activeTab)?.label ?? activeTab} />
+        )}
+      </div>
+    </main>
+  );
+}
+
+function OverviewTab({ project }: { project: ProjectDetail }) {
+  const primaryRepo = project.primaryRepository;
+  const ci = ciStateBadge(primaryRepo?.ciState ?? 'unknown');
+
+  return (
+    <div className="overview-tab">
+      <section className="stats-grid">
+        <div className="stat-card">
+          <small className="muted">CI Status</small>
+          <span className={ci.className}>{ci.label}</span>
+        </div>
+        <div className="stat-card">
+          <small className="muted">Open PRs</small>
+          <strong className="stat-value">{project.attention.openPullRequests}</strong>
+        </div>
+        <div className="stat-card">
+          <small className="muted">Attention Issues</small>
+          <strong
+            className={`stat-value ${project.attention.attentionIssues > 0 ? 'text-warning' : ''}`}
+          >
+            {project.attention.attentionIssues}
+          </strong>
+        </div>
+        <div className="stat-card">
+          <small className="muted">Total Issues</small>
+          <strong className="stat-value">{primaryRepo?.openIssueCount ?? 0}</strong>
+        </div>
+        <div className="stat-card">
+          <small className="muted">Default Branch</small>
+          <strong className="stat-value">{primaryRepo?.snapshot?.defaultBranch ?? 'main'}</strong>
+        </div>
+        <div className="stat-card">
+          <small className="muted">Last Active</small>
+          <strong className="stat-value">{formatRelativeTime(project.lastFetchedAt)}</strong>
+        </div>
+      </section>
+
+      <section className="cockpit-section">
+        <h3>Repositories</h3>
+        <div className="repo-grid">
+          {project.repositories.map((repo) => (
+            <div className="repo-card" key={`${repo.owner}/${repo.name}`}>
+              <div className="repo-card-header">
+                <strong>
+                  {repo.owner}/{repo.name}{' '}
+                  {repo.primary ? <span className="primary-pill">Primary</span> : null}
+                </strong>
+                {repo.snapshot?.url && isSafeGitHubUrl(repo.snapshot.url) ? (
+                  <a
+                    className="text-link"
+                    href={repo.snapshot.url}
+                    rel="noreferrer noopener"
+                    target="_blank"
+                  >
+                    View on GitHub ↗
+                  </a>
+                ) : null}
+              </div>
+              {repo.snapshot?.description ? (
+                <p className="repo-description">{repo.snapshot.description}</p>
+              ) : null}
+              <div className="repo-meta">
+                {repo.snapshot?.primaryLanguage ? (
+                  <span>Language: {repo.snapshot.primaryLanguage}</span>
+                ) : null}
+                <span>{repo.snapshot?.isPrivate ? 'Private' : 'Public'}</span>
+                <span>Branch: {repo.snapshot?.defaultBranch ?? 'main'}</span>
+                <span>Pushed: {formatRelativeTime(repo.snapshot?.pushedAt)}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="cockpit-section">
+        <div className="section-heading">
+          <h3>Open Pull Requests</h3>
+          {primaryRepo?.snapshot?.url && isSafeGitHubUrl(primaryRepo.snapshot.url) ? (
+            <a
+              className="text-link"
+              href={`${primaryRepo.snapshot.url}/pulls`}
+              rel="noreferrer noopener"
+              target="_blank"
+            >
+              View all on GitHub ↗
+            </a>
+          ) : null}
+        </div>
+        {project.openPullRequests.length === 0 ? (
+          <div className="state-panel">No open pull requests.</div>
+        ) : (
+          <div className="pr-list">
+            {project.openPullRequests.slice(0, 5).map((pr) => {
+              const prCi = ciStateBadge(pr.ciState);
+              return (
+                <div className="pr-row" key={pr.number}>
+                  <div>
+                    {isSafeGitHubUrl(pr.url) ? (
+                      <a
+                        className="pr-title"
+                        href={pr.url}
+                        rel="noreferrer noopener"
+                        target="_blank"
+                      >
+                        #{pr.number} {pr.title} ↗
+                      </a>
+                    ) : (
+                      <span className="pr-title">
+                        #{pr.number} {pr.title}
+                      </span>
+                    )}
+                    <small className="muted">
+                      {pr.author ? `by ${pr.author} · ` : ''}Updated{' '}
+                      {formatRelativeTime(pr.updatedAt)}
+                      {pr.draft ? ' · Draft' : ''}
+                    </small>
+                  </div>
+                  <span className={prCi.className}>{prCi.label}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      <section className="cockpit-section">
+        <div className="section-heading">
+          <h3>Attention Issues</h3>
+          {primaryRepo?.snapshot?.url && isSafeGitHubUrl(primaryRepo.snapshot.url) ? (
+            <a
+              className="text-link"
+              href={`${primaryRepo.snapshot.url}/issues`}
+              rel="noreferrer noopener"
+              target="_blank"
+            >
+              View all on GitHub ↗
+            </a>
+          ) : null}
+        </div>
+        {project.attentionIssues.length === 0 ? (
+          <div className="state-panel">No issues currently requiring attention.</div>
+        ) : (
+          <div className="issue-list">
+            {project.attentionIssues.slice(0, 5).map((issue) => (
+              <div className="issue-row" key={issue.number}>
+                <div>
+                  {isSafeGitHubUrl(issue.url) ? (
+                    <a
+                      className="issue-title"
+                      href={issue.url}
+                      rel="noreferrer noopener"
+                      target="_blank"
+                    >
+                      #{issue.number} {issue.title} ↗
+                    </a>
+                  ) : (
+                    <span className="issue-title">
+                      #{issue.number} {issue.title}
+                    </span>
+                  )}
+                  <div className="issue-labels">
+                    {issue.labels.map((label) => (
+                      <span className="issue-label" key={label}>
+                        {label}
+                      </span>
+                    ))}
+                    <small className="muted">· Updated {formatRelativeTime(issue.updatedAt)}</small>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function GitHubTab({ project }: { project: ProjectDetail }) {
+  const primaryRepo = project.primaryRepository;
+
+  return (
+    <div className="github-tab">
+      <section className="cockpit-section">
+        <div className="section-heading">
+          <h3>Repository & Branch State</h3>
+          {primaryRepo?.snapshot?.url && isSafeGitHubUrl(primaryRepo.snapshot.url) ? (
+            <a
+              className="text-link"
+              href={primaryRepo.snapshot.url}
+              rel="noreferrer noopener"
+              target="_blank"
+            >
+              View repository on GitHub ↗
+            </a>
+          ) : null}
+        </div>
+        {primaryRepo?.snapshot ? (
+          <div className="repo-card">
+            <h4>
+              {primaryRepo.owner}/{primaryRepo.name}
+            </h4>
+            <p className="repo-description">
+              {primaryRepo.snapshot.description ?? 'No description.'}
+            </p>
+            <div className="repo-meta">
+              <span>
+                Default Branch: <strong>{primaryRepo.snapshot.defaultBranch}</strong>
+              </span>
+              <span>
+                Visibility: <strong>{primaryRepo.snapshot.isPrivate ? 'Private' : 'Public'}</strong>
+              </span>
+              <span>
+                Archived: <strong>{primaryRepo.snapshot.isArchived ? 'Yes' : 'No'}</strong>
+              </span>
+              <span>
+                Primary Language: <strong>{primaryRepo.snapshot.primaryLanguage ?? 'None'}</strong>
+              </span>
+              <span>
+                Last Push: <strong>{formatRelativeTime(primaryRepo.snapshot.pushedAt)}</strong>
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div className="state-panel">Repository snapshot is not available.</div>
+        )}
+      </section>
+
+      <section className="cockpit-section">
+        <div className="section-heading">
+          <h3>Latest CI & Actions</h3>
+          {project.latestCi?.runUrl && isSafeGitHubUrl(project.latestCi.runUrl) ? (
+            <a
+              className="text-link"
+              href={project.latestCi.runUrl}
+              rel="noreferrer noopener"
+              target="_blank"
+            >
+              View Actions run on GitHub ↗
+            </a>
+          ) : null}
+        </div>
+        {project.latestCi ? (
+          <div className="ci-card">
+            <div className="ci-card-row">
+              <div>
+                <strong>{project.latestCi.workflowName ?? 'Latest Check Suite'}</strong>
+                <p className="muted">
+                  {project.latestCi.updatedAt
+                    ? `Updated ${formatRelativeTime(project.latestCi.updatedAt)}`
+                    : 'Recent run'}
+                </p>
+              </div>
+              <span className={ciStateBadge(project.latestCi.status).className}>
+                {ciStateBadge(project.latestCi.status).label}
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div className="state-panel">No recent CI status recorded.</div>
+        )}
+      </section>
+
+      <section className="cockpit-section">
+        <div className="section-heading">
+          <h3>Open Pull Requests ({project.openPullRequests.length})</h3>
+          {primaryRepo?.snapshot?.url && isSafeGitHubUrl(primaryRepo.snapshot.url) ? (
+            <a
+              className="text-link"
+              href={`${primaryRepo.snapshot.url}/pulls`}
+              rel="noreferrer noopener"
+              target="_blank"
+            >
+              View all on GitHub ↗
+            </a>
+          ) : null}
+        </div>
+        {project.openPullRequests.length === 0 ? (
+          <div className="state-panel">No open pull requests.</div>
+        ) : (
+          <div className="pr-list">
+            {project.openPullRequests.slice(0, 20).map((pr) => {
+              const prCi = ciStateBadge(pr.ciState);
+              return (
+                <div className="pr-row" key={pr.number}>
+                  <div>
+                    {isSafeGitHubUrl(pr.url) ? (
+                      <a
+                        className="pr-title"
+                        href={pr.url}
+                        rel="noreferrer noopener"
+                        target="_blank"
+                      >
+                        #{pr.number} {pr.title} ↗
+                      </a>
+                    ) : (
+                      <span className="pr-title">
+                        #{pr.number} {pr.title}
+                      </span>
+                    )}
+                    <small className="muted">
+                      {pr.author ? `by ${pr.author} · ` : ''}Updated{' '}
+                      {formatRelativeTime(pr.updatedAt)}
+                      {pr.draft ? ' · Draft' : ''}
+                    </small>
+                  </div>
+                  <span className={prCi.className}>{prCi.label}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      <section className="cockpit-section">
+        <div className="section-heading">
+          <h3>Attention Issues ({project.attentionIssues.length})</h3>
+          {primaryRepo?.snapshot?.url && isSafeGitHubUrl(primaryRepo.snapshot.url) ? (
+            <a
+              className="text-link"
+              href={`${primaryRepo.snapshot.url}/issues`}
+              rel="noreferrer noopener"
+              target="_blank"
+            >
+              View all on GitHub ↗
+            </a>
+          ) : null}
+        </div>
+        {project.attentionIssues.length === 0 ? (
+          <div className="state-panel">No issues currently flagged for attention.</div>
+        ) : (
+          <div className="issue-list">
+            {project.attentionIssues.slice(0, 20).map((issue) => (
+              <div className="issue-row" key={issue.number}>
+                <div>
+                  {isSafeGitHubUrl(issue.url) ? (
+                    <a
+                      className="issue-title"
+                      href={issue.url}
+                      rel="noreferrer noopener"
+                      target="_blank"
+                    >
+                      #{issue.number} {issue.title} ↗
+                    </a>
+                  ) : (
+                    <span className="issue-title">
+                      #{issue.number} {issue.title}
+                    </span>
+                  )}
+                  <div className="issue-labels">
+                    {issue.labels.map((label) => (
+                      <span className="issue-label" key={label}>
+                        {label}
+                      </span>
+                    ))}
+                    <small className="muted">· Updated {formatRelativeTime(issue.updatedAt)}</small>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function PlaceholderTab({ tabName }: { tabName: string }) {
+  return (
+    <div className="placeholder-panel">
+      <h3>{tabName}</h3>
+      <p>
+        This capability is planned for a future release. Phase 2A provides read-only repository,
+        pull request, issue, and CI status visibility.
+      </p>
+    </div>
+  );
+}
+
+function useProjects(): ProjectsState {
+  const [state, setState] = useState<ProjectsState>(initialProjectsState);
+  useEffect(() => {
+    const poller = createResourcePoller<ProjectsResponse>({
+      fetchData: async (signal) => {
+        const res = await fetch(`${apiBaseUrl}/projects`, { signal });
+        if (!res.ok) throw new Error('The Hub API did not return project data.');
+        return (await res.json()) as ProjectsResponse;
+      },
+      onState: setState,
+    });
+    poller.start();
+    return () => poller.stop();
+  }, []);
+  return state;
+}
+
+function useProjectDetail(projectId: string): ProjectDetailState {
+  const [state, setState] = useState<ProjectDetailState>(initialProjectDetailState);
+  useEffect(() => {
+    const poller = createResourcePoller<ProjectDetailResponse>({
+      fetchData: async (signal) => {
+        const res = await fetch(`${apiBaseUrl}/projects/${encodeURIComponent(projectId)}`, {
+          signal,
+        });
+        if (!res.ok) {
+          if (res.status === 404) throw new Error('Project not found');
+          throw new Error('The Hub API did not return project detail data.');
+        }
+        return (await res.json()) as ProjectDetailResponse;
+      },
+      onState: setState,
+    });
+    poller.start();
+    return () => poller.stop();
+  }, [projectId]);
+  return state;
 }

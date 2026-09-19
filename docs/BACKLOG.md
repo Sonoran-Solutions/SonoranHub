@@ -243,21 +243,21 @@ Every write action creates an audit event.
 
 # Epic F — GitHub/project plane
 
-## F1 — GitHub integration configuration [P0]
+## F1 — GitHub integration configuration [P0] — Implemented (Phase 2A)
 
-Use a GitHub App/integration with minimum required permissions.
+Use a GitHub App/integration with minimum read-only permissions (`Metadata`, `Pull Requests`, `Issues`, `Actions`, `Checks`, `Commit statuses`, `Contents`). Read-only adapter enforced at runtime.
 
-## F2 — Project/repository model [P0]
+## F2 — Project/repository model [P0] — Implemented (Phase 2A)
 
-Hub project points to one or more GitHub repositories.
+Hub project points to one or more GitHub repositories via `config/projects.json` (or `SONORAN_PROJECTS_PATH`), persisted to PostgreSQL tables `projects`, `project_repositories`, and `project_github_snapshots`.
 
-## F3 — Project cockpit [P0]
+## F3 — Project cockpit [P0] — Implemented (Phase 2A)
 
-Display branch/PR/issue/CI attention summary.
+Display branch/PR/issue/CI attention summary in responsive Projects list (`/projects`), Project detail cockpit (`/projects/:projectId`), and Home Mission Control attention card.
 
-## F4 — GitHub webhook ingestion [P1]
+## F4 — GitHub webhook ingestion [P1] — Deferred (Phase 2B)
 
-Verify signatures, normalize events, update project state.
+Verify signatures, normalize events, update project state without polling.
 
 ---
 

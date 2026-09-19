@@ -119,6 +119,12 @@ Responsive overview of machines, tasks, GitHub state, AI capacity, and attention
 
 A project cockpit combining repository state, tasks, documentation pointers, builds/CI, execution history, and notes.
 
+Phase 2A implements the read-only cockpit:
+- Project portfolio list (`/projects`) showing configured Sonoran Solutions projects, repository counts, open PRs, open issues, and aggregated CI status.
+- Project detail cockpit (`/projects/:projectId`) with Overview, per-repository breakdown, default branches, recent commit, open PRs with author and CI badges, open issues, and aggregated CI check runs / statuses.
+- Mission Control Home attention card surfacing repositories with failing CI or PRs awaiting review.
+- Tasks, Runs, and Notes tabs exist in the cockpit as clearly labeled placeholders pending Phase 3 task execution. Webhook ingestion (Phase 2B) and GitHub mutation (Phase 3) remain deferred.
+
 ### Tasks / Runs
 
 Structured work requests and their immutable execution history.

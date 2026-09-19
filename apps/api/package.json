@@ -16,6 +16,7 @@
     "@sonoran-hub/ai-capacity": "workspace:*",
     "@sonoran-hub/config": "workspace:*",
     "@sonoran-hub/contracts": "workspace:*",
+    "@sonoran-hub/github": "workspace:*",
     "fastify": "^5.12.4",
     "pg": "^8.23.0",
     "ws": "^8.18.3"

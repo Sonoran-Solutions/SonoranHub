@@ -17,5 +17,13 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@octokit/auth-app": "^8.3.1",
+    "@octokit/rest": "^22.0.1",
+    "@sonoran-hub/config": "workspace:*",
+    "@sonoran-hub/contracts": "workspace:*",
+    "octokit": "^5.0.5",
+    "zod": "4.5.0"
   }
 }

@@ -10,7 +10,7 @@
   },
   "scripts": {
     "build": "pnpm -r --if-present build",
-    "build:packages": "pnpm --filter @sonoran-hub/contracts build && pnpm --filter @sonoran-hub/config build && pnpm --filter @sonoran-hub/ai-capacity build",
+    "build:packages": "pnpm --filter @sonoran-hub/contracts build && pnpm --filter @sonoran-hub/config build && pnpm --filter @sonoran-hub/ai-capacity build && pnpm --filter @sonoran-hub/github build",
     "dev:agent": "pnpm --filter @sonoran-hub/agent dev",
     "dev:api": "pnpm --filter @sonoran-hub/api dev",
     "dev:web": "pnpm --filter @sonoran-hub/web dev",
@@ -20,6 +20,7 @@
     "smoke:codex": "pnpm build:packages && node scripts/smoke-codex.mjs",
     "smoke:gemini": "pnpm build:packages && node scripts/smoke-gemini.mjs",
     "smoke:agent-actions": "pnpm build:packages && node scripts/smoke-agent-actions.mjs",
+    "smoke:github": "pnpm build:packages && node scripts/smoke-github.mjs",
     "format": "prettier --write \"**/*.{js,ts,tsx,json,css,yml,yaml}\"",
     "format:check": "prettier --check \"**/*.{js,ts,tsx,json,css,yml,yaml}\"",
     "lint": "eslint .",

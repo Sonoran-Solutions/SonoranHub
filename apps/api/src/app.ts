@@ -16,9 +16,11 @@ import {
   machineActionInputSchema,
   machineActionResponseSchema,
   machineActionsResponseSchema,
+  machinesResponseSchema,
+  projectDetailResponseSchema,
+  projectsResponseSchema,
   serviceHealthSchema,
   type CapacitySnapshot,
-  machinesResponseSchema,
 } from '@sonoran-hub/contracts';
 
 import {
@@ -37,9 +39,11 @@ import {
   type MachineStore,
 } from './machines.js';
 import { type MachineActionStore } from './actions.js';
+import { type ProjectService } from './projects.js';
 
 export interface BuildAppOptions {
   readonly capacityService?: CapacityService;
+  readonly projectService?: ProjectService;
   readonly allowedOrigins?: readonly string[];
   readonly machineStore?: MachineStore;
   readonly machineActionStore?: MachineActionStore;
@@ -224,6 +228,44 @@ export function buildApp(
       }
     },
   );
+
+  app.get('/projects', async (_request, reply) => {
+    const service = options.projectService;
+    if (!service) {
+      return projectsResponseSchema.parse({
+        projects: [],
+        sourceHealth: { configured: false, available: false },
+        generatedAt: new Date().toISOString(),
+      });
+    }
+
+    try {
+      return projectsResponseSchema.parse(await service.list());
+    } catch {
+      reply.code(503);
+      return { error: { code: 'projects_unavailable', message: 'Project data is unavailable' } };
+    }
+  });
+
+  app.get<{ Params: { projectId: string } }>('/projects/:projectId', async (request, reply) => {
+    const service = options.projectService;
+    if (!service) {
+      reply.code(404);
+      return { error: { code: 'project_not_found', message: 'Project was not found' } };
+    }
+
+    try {
+      const response = await service.get(request.params.projectId);
+      if (!response) {
+        reply.code(404);
+        return { error: { code: 'project_not_found', message: 'Project was not found' } };
+      }
+      return projectDetailResponseSchema.parse(response);
+    } catch {
+      reply.code(503);
+      return { error: { code: 'projects_unavailable', message: 'Project data is unavailable' } };
+    }
+  });
 
   const upgradeHandler = (request: IncomingMessage, socket: Socket, head: Buffer) => {
     let pathname: string;

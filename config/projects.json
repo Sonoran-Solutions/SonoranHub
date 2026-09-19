@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "projects": [
+    {
+      "id": "sonoran-hub",
+      "name": "Sonoran Hub",
+      "description": "Control plane for Sonoran Solutions",
+      "attentionLabels": ["bug", "blocked", "priority"],
+      "repositories": [
+        {
+          "owner": "Sonoran-Solutions",
+          "name": "SonoranHub",
+          "primary": true
+        }
+      ]
+    }
+  ]
+}
