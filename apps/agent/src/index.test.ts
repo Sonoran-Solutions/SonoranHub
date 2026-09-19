@@ -72,7 +72,7 @@ const websocketImpl = FakeWebSocket as unknown as typeof WebSocket;
 function acceptedMessage(interval = 1_000) {
   return {
     type: 'agent.hello.accepted',
-    protocolVersion: 1,
+    protocolVersion: 2,
     serverTime: '2026-09-15T12:00:00.000Z',
     heartbeatIntervalMs: interval,
   };
@@ -274,7 +274,7 @@ describe('Agent connection lifecycle', () => {
     protocolErrorSocket.open();
     protocolErrorSocket.message({
       type: 'agent.protocol.error',
-      protocolVersion: 1,
+      protocolVersion: 2,
       code: 'hello_required',
       message: 'hello required',
     });

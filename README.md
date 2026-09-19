@@ -121,7 +121,9 @@ pnpm dev:api    # Fastify API on http://127.0.0.1:3000
 pnpm dev:agent  # Sonoran Agent process
 ```
 
-The API exposes `GET /health`, `GET /machines`, `GET /capacity`, and bounded
+The API exposes `GET /health`, `GET /machines`,
+`POST /machines/:machineId/actions`, `GET /machines/:machineId/actions`, and
+`GET /actions/:actionId`, plus `GET /capacity` and bounded
 `GET /capacity/history?provider=&since=&limit=`. Open
 `http://127.0.0.1:5173/capacity` for the responsive Capacity dashboard or
 `http://127.0.0.1:5173/machines` for connected Agent telemetry. The
@@ -141,12 +143,13 @@ API allows browser requests from the
 comma-separated origins in `WEB_ORIGIN`; by default this includes both
 `http://127.0.0.1:5173` and `http://localhost:5173`.
 
-For the Phase 1A Agent prototype, set the same temporary bearer credential in
+For the Phase 1B Agent, set the same temporary bearer credential in
 `SONORAN_AGENT_TOKEN` for the API and Agent, then start the Agent with
 `SONORAN_HUB_URL=ws://127.0.0.1:3000/agent/ws pnpm dev:agent`. The Agent
 creates a stable ID under `~/.sonoran-agent/state`, connects outbound over an
 authenticated WebSocket, and reports CPU, memory, disk, and uptime telemetry.
-It has no remote command or shell capability in this phase. Cleartext `ws://`
+The Agent protocol is v2 and supports only typed `repo.status` and tightly
+bounded user-level `service.restart` actions. Cleartext `ws://`
 is accepted only for loopback development endpoints; remote Hub connections
 must use `wss://`. A configured Hub URL without `SONORAN_AGENT_TOKEN` fails
 closed. Set `SONORAN_AGENT_DISK_PATHS=/,/mnt/data` to sample multiple
@@ -157,7 +160,10 @@ close for live sessions, terminates sockets that do not close in time, and then
 lets Fastify finish closing. Protocol rejection is terminal for that socket,
 and lifecycle/security transitions are available through the injectable
 structured event sink without persisting a full audit stream. Machine detail
-metadata includes the persisted Agent protocol version.
+metadata includes the persisted Agent protocol version and safe local action
+target catalog. The Agent keeps action authority in
+`~/.sonoran-agent/policy.json` (or `SONORAN_AGENT_POLICY_PATH`); Hub never
+chooses an executable, filesystem path, or systemd unit.
 
 Shared services validate `NODE_ENV`, `LOG_LEVEL`, and `SERVICE_NAME` through
 `@sonoran-hub/config`. Structured logs carry service and optional correlation
@@ -190,8 +196,9 @@ If those seven things work reliably from an Android phone away from the main PC,
 
 ## Current status
 
-**Phase 1A foundation implemented.** Agent transport, machine identity,
-basic telemetry, machine state, and the responsive Machines surface are live.
-Remote actions and task execution remain deferred.
+**Phase 1B implemented.** Agent transport, machine identity, basic telemetry,
+typed policy-enforced `repo.status`/user-level `service.restart` actions, durable
+action state, and the responsive Machines surface are live. Arbitrary shell,
+Git mutation, workers, and task execution remain deferred.
 
 Start with [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).

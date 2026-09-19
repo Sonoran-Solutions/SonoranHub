@@ -13,6 +13,9 @@ import {
   capacityCurrentResponseSchema,
   capacityHistoryResponseSchema,
   capacityTimestampSchema,
+  machineActionInputSchema,
+  machineActionResponseSchema,
+  machineActionsResponseSchema,
   serviceHealthSchema,
   type CapacitySnapshot,
   machinesResponseSchema,
@@ -27,15 +30,19 @@ import {
 import { DEFAULT_WEB_ORIGINS } from './cors.js';
 import {
   createAgentWebSocketServer,
+  MachineActionDispatchError,
   MachineHub,
+  type MachineActionDispatchErrorCode,
   type MachineEventSink,
   type MachineStore,
 } from './machines.js';
+import { type MachineActionStore } from './actions.js';
 
 export interface BuildAppOptions {
   readonly capacityService?: CapacityService;
   readonly allowedOrigins?: readonly string[];
   readonly machineStore?: MachineStore;
+  readonly machineActionStore?: MachineActionStore;
   readonly agentToken?: string;
   readonly machineHub?: MachineHub;
   readonly machineEventSink?: MachineEventSink;
@@ -61,6 +68,7 @@ export function buildApp(
     options.machineHub ??
     new MachineHub({
       store: options.machineStore,
+      actionStore: options.machineActionStore,
       agentToken: options.agentToken,
       eventSink: options.machineEventSink ?? {
         emit: (event) => app.log.info({ event: event.type, ...event }, event.type),
@@ -94,6 +102,56 @@ export function buildApp(
       reply.code(503);
       return { error: { code: 'machines_unavailable', message: 'Machine data is unavailable' } };
     }
+  });
+
+  app.post<{ Params: { machineId: string } }>(
+    '/machines/:machineId/actions',
+    async (request, reply) => {
+      const parsed = machineActionInputSchema.safeParse(request.body);
+      if (!parsed.success) {
+        reply.code(400);
+        return { error: { code: 'invalid_action', message: 'Action request is invalid' } };
+      }
+      try {
+        const action = await machineHub.requestAction(request.params.machineId, parsed.data);
+        reply.code(202);
+        return machineActionResponseSchema.parse(action);
+      } catch (error) {
+        if (error instanceof MachineActionDispatchError) {
+          reply.code(actionDispatchStatusCode(error.code));
+          return { error: { code: error.code, message: error.message } };
+        }
+        reply.code(503);
+        return { error: { code: 'action_unavailable', message: 'Action dispatch is unavailable' } };
+      }
+    },
+  );
+
+  app.get<{ Params: { machineId: string } }>(
+    '/machines/:machineId/actions',
+    async (request, reply) => {
+      try {
+        return machineActionsResponseSchema.parse({
+          actions: await machineHub.listActions(request.params.machineId),
+        });
+      } catch (error) {
+        if (error instanceof MachineActionDispatchError) {
+          reply.code(404);
+          return { error: { code: error.code, message: error.message } };
+        }
+        reply.code(503);
+        return { error: { code: 'action_unavailable', message: 'Action data is unavailable' } };
+      }
+    },
+  );
+
+  app.get<{ Params: { actionId: string } }>('/actions/:actionId', async (request, reply) => {
+    const action = await machineHub.getAction(request.params.actionId);
+    if (!action) {
+      reply.code(404);
+      return { error: { code: 'action_not_found', message: 'Action was not found' } };
+    }
+    return machineActionResponseSchema.parse(action);
   });
 
   app.get('/capacity', async (_request, reply) => {
@@ -260,6 +318,12 @@ function safeMessage(message: string): string {
   return (typeof redacted === 'string' ? redacted : 'Capacity operation failed')
     .replace(/\s+/g, ' ')
     .slice(0, 300);
+}
+
+function actionDispatchStatusCode(code: MachineActionDispatchErrorCode): number {
+  if (code === 'machine_not_found' || code === 'target_not_found') return 404;
+  if (code === 'machine_offline' || code === 'action_busy') return 409;
+  return 503;
 }
 
 function markSnapshotFreshness(snapshot: CapacitySnapshot): CapacitySnapshot {

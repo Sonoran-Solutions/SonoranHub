@@ -3,6 +3,7 @@ import type { IncomingMessage } from 'node:http';
 
 import {
   AGENT_PROTOCOL_VERSION,
+  type MachineActionRecord,
   type AgentHello,
   type MachineTelemetry,
 } from '@sonoran-hub/contracts';
@@ -16,6 +17,7 @@ import {
   type ActiveMachineSession,
   type MachineAuditEvent,
 } from './machines.js';
+import { InMemoryMachineActionStore } from './actions.js';
 
 class FakeSocket extends EventEmitter {
   readyState: number = WebSocket.OPEN;
@@ -67,6 +69,19 @@ function hello(machineId = 'machine-x'): AgentHello {
     machine: { id: machineId, name: 'Main PC', platform: 'linux', arch: 'x64' },
     capabilities: ['machine.read.telemetry'],
     policyRevision: 'sha256:test',
+    actionCatalog: { repositories: [], services: [] },
+  };
+}
+
+function actionHello(machineId = 'machine-actions'): AgentHello {
+  return {
+    ...hello(machineId),
+    capabilities: ['machine.read.telemetry', 'repo.read'],
+    policyRevision: `sha256:${'a'.repeat(64)}`,
+    actionCatalog: {
+      repositories: [{ id: 'repo', label: 'Repository' }],
+      services: [],
+    },
   };
 }
 
@@ -87,6 +102,20 @@ async function connectAndHeartbeat(
     type: 'agent.heartbeat',
     protocolVersion: AGENT_PROTOCOL_VERSION,
     sequence,
+    sentAt: telemetry.capturedAt,
+    telemetry,
+  });
+  await flushMessages();
+}
+
+async function connectActionAgent(hub: MachineHub, socket: FakeSocket): Promise<void> {
+  hub.handleSocket(socket as unknown as WebSocket);
+  socket.message(actionHello());
+  await flushMessages();
+  socket.message({
+    type: 'agent.heartbeat',
+    protocolVersion: AGENT_PROTOCOL_VERSION,
+    sequence: 1,
     sentAt: telemetry.capturedAt,
     telemetry,
   });
@@ -363,7 +392,7 @@ describe('MachineHub lifecycle events', () => {
         type: 'agent.hello_accepted',
         machineId: 'machine-x',
         machineName: 'Main PC',
-        protocolVersion: 1,
+        protocolVersion: 2,
         agentVersion: '0.2.0',
         policyRevision: 'sha256:test',
         capabilities: ['machine.read.telemetry'],
@@ -424,5 +453,112 @@ describe('MachineHub application shutdown', () => {
       ),
     ]);
     expect(Date.now() - closeStartedAt).toBeLessThan(500);
+  });
+});
+
+describe('MachineHub typed action lifecycle', () => {
+  it('correlates accepted and terminal results without exposing local mappings', async () => {
+    const actionStore = new InMemoryMachineActionStore();
+    const hub = new MachineHub({
+      store: new InMemoryMachineStore(),
+      actionStore,
+    });
+    const socket = new FakeSocket();
+    await connectActionAgent(hub, socket);
+    const action = await hub.requestAction('machine-actions', {
+      kind: 'repo.status',
+      targetId: 'repo',
+    });
+    const wireRequest = JSON.parse(socket.sent.at(-1)!);
+    expect(wireRequest).toMatchObject({
+      type: 'agent.action.request',
+      action: { kind: 'repo.status', targetId: 'repo' },
+    });
+    expect(JSON.stringify(wireRequest)).not.toContain('/');
+    expect(wireRequest.command).toBeUndefined();
+    expect(action.status).toBe('PENDING');
+
+    socket.message({
+      type: 'agent.action.accepted',
+      protocolVersion: AGENT_PROTOCOL_VERSION,
+      actionId: action.actionId,
+      acceptedAt: telemetry.capturedAt,
+    });
+    await flushMessages();
+    expect(await actionStore.get(action.actionId)).toMatchObject({ status: 'RUNNING' });
+    socket.message({
+      type: 'agent.action.result',
+      protocolVersion: AGENT_PROTOCOL_VERSION,
+      actionId: action.actionId,
+      kind: 'repo.status',
+      targetId: 'repo',
+      policyRevision: `sha256:${'a'.repeat(64)}`,
+      status: 'succeeded',
+      completedAt: telemetry.capturedAt,
+      result: {
+        kind: 'repo.status',
+        targetId: 'repo',
+        branch: 'main',
+        detached: false,
+        dirty: false,
+        ahead: 0,
+        behind: 0,
+        staged: 0,
+        unstaged: 0,
+        untracked: 0,
+      },
+    });
+    await flushMessages();
+    expect(await actionStore.get(action.actionId)).toMatchObject({ status: 'SUCCEEDED' });
+  });
+
+  it('interrupts active actions on disconnect and never replays them after reconnect', async () => {
+    const actionStore = new InMemoryMachineActionStore();
+    const hub = new MachineHub({ store: new InMemoryMachineStore(), actionStore });
+    const first = new FakeSocket();
+    await connectActionAgent(hub, first);
+    const action = await hub.requestAction('machine-actions', {
+      kind: 'repo.status',
+      targetId: 'repo',
+    });
+    first.message({
+      type: 'agent.action.accepted',
+      protocolVersion: AGENT_PROTOCOL_VERSION,
+      actionId: action.actionId,
+      acceptedAt: telemetry.capturedAt,
+    });
+    await flushMessages();
+    first.emitClose();
+    await flushMessages();
+    expect(await actionStore.get(action.actionId)).toMatchObject({ status: 'INTERRUPTED' });
+
+    const second = new FakeSocket();
+    await connectActionAgent(hub, second);
+    expect(second.sent.some((frame) => JSON.parse(frame).type === 'agent.action.request')).toBe(
+      false,
+    );
+  });
+
+  it('serves action records through the typed API', async () => {
+    const hub = new MachineHub({
+      store: new InMemoryMachineStore(),
+      actionStore: new InMemoryMachineActionStore(),
+    });
+    const socket = new FakeSocket();
+    await connectActionAgent(hub, socket);
+    const app = buildApp(undefined, { machineHub: hub });
+    const created = await app.inject({
+      method: 'POST',
+      url: '/machines/machine-actions/actions',
+      payload: { kind: 'repo.status', targetId: 'repo' },
+    });
+    const record = created.json() as MachineActionRecord;
+    const fetched = await app.inject({ method: 'GET', url: `/actions/${record.actionId}` });
+    const listed = await app.inject({ method: 'GET', url: '/machines/machine-actions/actions' });
+    await app.close();
+    expect(created.statusCode).toBe(202);
+    expect(fetched.statusCode).toBe(200);
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().actions).toHaveLength(1);
   });
 });

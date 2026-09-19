@@ -344,3 +344,28 @@ Before remote execution is considered MVP-ready:
 - [ ] Worktree isolation.
 - [ ] Elevated confirmation for reboot/shutdown/destructive actions.
 - [ ] Recovery behavior tested for Agent/Hub/network interruption.
+## Phase 1B Agent action boundary
+
+The Hub cannot choose executable commands, filesystem paths, or systemd unit
+names. It requests a typed action against a logical target ID. The Agent
+resolves that ID against a local, strict policy and may deny the request.
+
+The only initial actions are read-only `repo.status` and disruptive but bounded
+user-level `service.restart`. The policy file is local to the Agent, rejects
+duplicate IDs, relative repository paths, unsafe service unit syntax, oversized
+values, and group/other-writable files. The default missing policy produces a
+telemetry-only Agent; an explicitly configured missing or malformed file fails
+startup.
+
+Action requests contain no command, arguments, path, unit, shell, or script
+field. Subprocesses are fixed Agent code with explicit argv, `shell: false`,
+bounded stdout/stderr, and SIGTERM/SIGKILL timeout cleanup. `systemctl` is
+always invoked with `--user`; sudo, pkexec, system-level service restart, and
+root actions are unsupported.
+
+The policy revision fingerprints normalized target mappings and capabilities.
+The Agent checks it before execution, along with the UUID action ID, deadline,
+capability, local target resolution, and one-action busy guard. Duplicate IDs
+are rejected for the life of the Agent process. Hub persistence and audit
+metadata exclude local paths, units, policy JSON, raw command output, and
+credentials. There is no automatic action retry after disconnect.

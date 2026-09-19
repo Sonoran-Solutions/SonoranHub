@@ -1,5 +1,5 @@
 import type { IncomingMessage } from 'node:http';
-import { timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 
 import {
   AGENT_HEARTBEAT_INTERVAL_MS,
@@ -8,12 +8,20 @@ import {
   agentClientMessageSchema,
   agentHelloAcceptedSchema,
   agentProtocolErrorSchema,
+  machineActionCatalogSchema,
+  machineActionInputSchema,
+  machineActionRecordSchema,
   machineConnectionStatusSchema,
   machineSummarySchema,
   machinesResponseSchema,
   type AgentClientMessage,
+  type AgentActionResult,
   type AgentProtocolError,
   type MachineIdentity,
+  type MachineActionCatalog,
+  type MachineActionInput,
+  type MachineActionRecord,
+  type MachineActionStatus,
   type MachineConnectionStatus,
   type MachineSummary,
   type MachineTelemetry,
@@ -21,12 +29,15 @@ import {
 import type { Pool } from 'pg';
 import WebSocket, { WebSocketServer } from 'ws';
 
+import { InMemoryMachineActionStore, type MachineActionStore } from './actions.js';
+
 export interface PersistedMachine {
   readonly identity: MachineIdentity;
   readonly protocolVersion: number;
   readonly agentVersion: string;
   readonly capabilities: MachineSummary['capabilities'];
   readonly policyRevision: string;
+  readonly actionCatalog: MachineActionCatalog;
   readonly lastSeenAt: string;
   readonly telemetry: MachineTelemetry | null;
 }
@@ -59,8 +70,8 @@ export class PostgresMachineStore implements MachineStore {
   async upsert(machine: PersistedMachine): Promise<void> {
     await this.pool.query(
       `INSERT INTO machines
-        (id, name, platform, arch, protocol_version, agent_version, capabilities, policy_revision, last_seen_at, telemetry)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::timestamptz, $10::jsonb)
+        (id, name, platform, arch, protocol_version, agent_version, capabilities, policy_revision, action_catalog, last_seen_at, telemetry)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, $10::timestamptz, $11::jsonb)
        ON CONFLICT (id) DO UPDATE SET
          name = EXCLUDED.name,
          platform = EXCLUDED.platform,
@@ -69,6 +80,7 @@ export class PostgresMachineStore implements MachineStore {
          agent_version = EXCLUDED.agent_version,
          capabilities = EXCLUDED.capabilities,
          policy_revision = EXCLUDED.policy_revision,
+         action_catalog = EXCLUDED.action_catalog,
          last_seen_at = EXCLUDED.last_seen_at,
          telemetry = EXCLUDED.telemetry,
          updated_at = now()`,
@@ -81,6 +93,7 @@ export class PostgresMachineStore implements MachineStore {
         machine.agentVersion,
         JSON.stringify(machine.capabilities),
         machine.policyRevision,
+        JSON.stringify(machine.actionCatalog),
         machine.lastSeenAt,
         JSON.stringify(machine.telemetry),
       ],
@@ -97,10 +110,11 @@ export class PostgresMachineStore implements MachineStore {
       agent_version: string;
       capabilities: PersistedMachine['capabilities'];
       policy_revision: string;
+      action_catalog: MachineActionCatalog;
       last_seen_at: Date | string;
       telemetry: MachineTelemetry | null;
     }>(
-      `SELECT id, name, platform, arch, protocol_version, agent_version, capabilities, policy_revision, last_seen_at, telemetry
+      `SELECT id, name, platform, arch, protocol_version, agent_version, capabilities, policy_revision, action_catalog, last_seen_at, telemetry
        FROM machines WHERE id = $1`,
       [machineId],
     );
@@ -118,10 +132,11 @@ export class PostgresMachineStore implements MachineStore {
       agent_version: string;
       capabilities: PersistedMachine['capabilities'];
       policy_revision: string;
+      action_catalog: MachineActionCatalog;
       last_seen_at: Date | string;
       telemetry: MachineTelemetry | null;
     }>(
-      `SELECT id, name, platform, arch, protocol_version, agent_version, capabilities, policy_revision, last_seen_at, telemetry
+      `SELECT id, name, platform, arch, protocol_version, agent_version, capabilities, policy_revision, action_catalog, last_seen_at, telemetry
        FROM machines ORDER BY name ASC, id ASC`,
     );
     return result.rows.map(mapPersistedMachine);
@@ -137,6 +152,7 @@ interface PersistedMachineRow {
   agent_version: string;
   capabilities: PersistedMachine['capabilities'];
   policy_revision: string;
+  action_catalog: MachineActionCatalog;
   last_seen_at: Date | string;
   telemetry: MachineTelemetry | null;
 }
@@ -148,6 +164,7 @@ function mapPersistedMachine(row: PersistedMachineRow): PersistedMachine {
     agentVersion: row.agent_version,
     capabilities: row.capabilities,
     policyRevision: row.policy_revision,
+    actionCatalog: machineActionCatalogSchema.parse(row.action_catalog),
     lastSeenAt: new Date(row.last_seen_at).toISOString(),
     telemetry: row.telemetry,
   };
@@ -155,6 +172,7 @@ function mapPersistedMachine(row: PersistedMachineRow): PersistedMachine {
 
 export interface MachineHubOptions {
   readonly store?: MachineStore;
+  readonly actionStore?: MachineActionStore;
   readonly agentToken?: string;
   readonly heartbeatIntervalMs?: number;
   readonly staleAfterMs?: number;
@@ -172,7 +190,14 @@ export type MachineAuditEventType =
   | 'agent.session_replaced'
   | 'agent.disconnected'
   | 'agent.stale'
-  | 'agent.online';
+  | 'agent.online'
+  | 'agent.action_requested'
+  | 'agent.action_accepted'
+  | 'agent.action_denied'
+  | 'agent.action_succeeded'
+  | 'agent.action_failed'
+  | 'agent.action_timed_out'
+  | 'agent.action_interrupted';
 
 export interface MachineAuditEvent {
   readonly type: MachineAuditEventType;
@@ -183,6 +208,10 @@ export interface MachineAuditEvent {
   readonly protocolVersion?: number;
   readonly policyRevision?: string;
   readonly capabilities?: readonly string[];
+  readonly actionId?: string;
+  readonly actionKind?: string;
+  readonly targetId?: string;
+  readonly actionStatus?: MachineActionStatus;
   readonly reason?: string;
 }
 
@@ -214,6 +243,7 @@ interface ConnectionState {
   protocolVersion: number | undefined;
   policyRevision: string | undefined;
   capabilities: readonly string[] | undefined;
+  actionCatalog: MachineActionCatalog | undefined;
   session: ActiveMachineSession | undefined;
   helloTimer: NodeJS.Timeout | undefined;
   terminal: boolean;
@@ -223,6 +253,7 @@ interface ConnectionState {
 
 export class MachineHub {
   readonly store: MachineStore;
+  readonly actionStore: MachineActionStore;
   readonly heartbeatIntervalMs: number;
   private readonly agentToken?: string;
   private readonly staleAfterMs: number;
@@ -233,11 +264,16 @@ export class MachineHub {
   private readonly sessions = new Map<string, ActiveMachineSession>();
   private readonly connections = new Set<WebSocket>();
   private readonly connectionStates = new Map<WebSocket, ConnectionState>();
+  private readonly pendingActions = new Map<
+    string,
+    { readonly machineId: string; readonly socket: WebSocket; readonly timer: NodeJS.Timeout }
+  >();
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | undefined;
 
   constructor(options: MachineHubOptions = {}) {
     this.store = options.store ?? new InMemoryMachineStore();
+    this.actionStore = options.actionStore ?? new InMemoryMachineActionStore();
     this.agentToken = options.agentToken;
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? AGENT_HEARTBEAT_INTERVAL_MS;
     this.staleAfterMs = options.staleAfterMs ?? this.heartbeatIntervalMs * 2;
@@ -273,6 +309,72 @@ export class MachineHub {
     return this.sessions.size;
   }
 
+  async getAction(actionId: string): Promise<MachineActionRecord | undefined> {
+    return this.actionStore.get(actionId);
+  }
+
+  async listActions(machineId: string): Promise<readonly MachineActionRecord[]> {
+    const machine = await this.store.get(machineId);
+    if (!machine)
+      throw new MachineActionDispatchError('machine_not_found', 'Machine was not found');
+    return this.actionStore.listForMachine(machineId);
+  }
+
+  async requestAction(machineId: string, input: MachineActionInput): Promise<MachineActionRecord> {
+    const action = machineActionInputSchema.parse(input);
+    const machine = await this.store.get(machineId);
+    if (!machine)
+      throw new MachineActionDispatchError('machine_not_found', 'Machine was not found');
+    const session = this.sessions.get(machineId);
+    const state = session ? this.connectionStates.get(session.socket) : undefined;
+    if (!session || !state || session.status !== 'ONLINE') {
+      throw new MachineActionDispatchError('machine_offline', 'Machine is not online');
+    }
+    if (!state.policyRevision) {
+      throw new MachineActionDispatchError('machine_offline', 'Machine policy is unavailable');
+    }
+    if ([...this.pendingActions.values()].some((pending) => pending.machineId === machineId)) {
+      throw new MachineActionDispatchError('action_busy', 'Machine already has an active action');
+    }
+
+    const requestedAt = new Date(this.now()).toISOString();
+    const actionId = randomUUID();
+    const deadlineAt = new Date(this.now() + actionTimeoutMs(action.kind)).toISOString();
+    const record: MachineActionRecord = {
+      actionId,
+      machineId,
+      kind: action.kind,
+      targetId: action.targetId,
+      status: 'PENDING',
+      policyRevision: state.policyRevision,
+      requestedAt,
+    };
+    await this.actionStore.create(record);
+    const timer = setTimeout(
+      () => void this.timeoutAction(actionId),
+      actionTimeoutMs(action.kind) + 100,
+    );
+    this.pendingActions.set(actionId, { machineId, socket: session.socket, timer });
+    this.emitEvent({
+      type: 'agent.action_requested',
+      actionId,
+      actionKind: action.kind,
+      targetId: action.targetId,
+      actionStatus: 'PENDING',
+      policyRevision: state.policyRevision,
+      machineId,
+    });
+    this.send(session.socket, {
+      type: 'agent.action.request',
+      protocolVersion: AGENT_PROTOCOL_VERSION,
+      actionId,
+      policyRevision: state.policyRevision,
+      deadlineAt,
+      action,
+    });
+    return record;
+  }
+
   async list(): Promise<ReturnType<typeof machinesResponseSchema.parse>> {
     const records = await this.store.list();
     const response = {
@@ -302,6 +404,7 @@ export class MachineHub {
       protocolVersion: undefined,
       policyRevision: undefined,
       capabilities: undefined,
+      actionCatalog: undefined,
       session: undefined as ActiveMachineSession | undefined,
       helloTimer: undefined as NodeJS.Timeout | undefined,
       terminal: this.shuttingDown,
@@ -379,6 +482,7 @@ export class MachineHub {
         protocolVersion: message.protocolVersion,
         agentVersion: message.agentVersion,
         capabilities: message.capabilities,
+        actionCatalog: message.actionCatalog,
         policyRevision: message.policyRevision,
         lastSeenAt: existing?.lastSeenAt ?? new Date(this.now()).toISOString(),
         telemetry: existing?.telemetry ?? null,
@@ -401,9 +505,10 @@ export class MachineHub {
       state.helloTimer = undefined;
       const replaced = this.sessions.get(session.machineId);
       const replacedState = replaced ? this.connectionStates.get(replaced.socket) : undefined;
-      if (replacedState) {
+      if (replaced && replacedState) {
         replacedState.terminal = true;
         replacedState.closeReason = SESSION_REPLACED_CLOSE_REASON;
+        await this.interruptActionsForSocket(replaced.socket);
       }
       this.sessions.set(session.machineId, session);
       state.helloReceived = true;
@@ -413,6 +518,7 @@ export class MachineHub {
       state.protocolVersion = message.protocolVersion;
       state.policyRevision = message.policyRevision;
       state.capabilities = message.capabilities;
+      state.actionCatalog = message.actionCatalog;
       state.session = session;
       if (replaced && replaced.socket !== socket) {
         if (replaced.socket.readyState === WebSocket.OPEN) {
@@ -441,6 +547,14 @@ export class MachineHub {
       this.reject(socket, 'hello_required', 'Agent hello is required before heartbeat');
       return;
     }
+    if (message.type === 'agent.action.accepted') {
+      await this.handleActionAccepted(socket, state, message);
+      return;
+    }
+    if (message.type === 'agent.action.result') {
+      await this.handleActionResult(socket, state, message);
+      return;
+    }
     if (message.sequence <= state.session.lastSequence) {
       this.reject(socket, 'non_monotonic_sequence', 'Heartbeat sequence must increase');
       return;
@@ -455,6 +569,142 @@ export class MachineHub {
     state.session.lastSequence = message.sequence;
     state.session.lastHeartbeatReceivedAt = this.now();
     this.transitionStatus(state.session, this.statusForSession(state.session));
+  }
+
+  private async handleActionAccepted(
+    socket: WebSocket,
+    state: ConnectionState,
+    message: Extract<AgentClientMessage, { type: 'agent.action.accepted' }>,
+  ): Promise<void> {
+    const pending = this.pendingActions.get(message.actionId);
+    if (!pending || pending.socket !== socket || pending.machineId !== state.machineId) {
+      this.reject(socket, 'unknown_action', 'Action correlation is not known');
+      return;
+    }
+    const action = await this.actionStore.get(message.actionId);
+    if (!action || action.status !== 'PENDING') {
+      this.reject(socket, 'invalid_action_transition', 'Action acceptance is not valid');
+      return;
+    }
+    await this.transitionAction(action, 'RUNNING', { startedAt: message.acceptedAt });
+  }
+
+  private async handleActionResult(
+    socket: WebSocket,
+    state: ConnectionState,
+    message: AgentActionResult,
+  ): Promise<void> {
+    const pending = this.pendingActions.get(message.actionId);
+    if (!pending || pending.socket !== socket || pending.machineId !== state.machineId) {
+      this.reject(socket, 'unknown_action', 'Action correlation is not known');
+      return;
+    }
+    const action = await this.actionStore.get(message.actionId);
+    if (
+      !action ||
+      action.kind !== message.kind ||
+      action.targetId !== message.targetId ||
+      action.policyRevision !== message.policyRevision ||
+      state.policyRevision !== message.policyRevision ||
+      (message.result !== undefined &&
+        (message.result.kind !== message.kind || message.result.targetId !== message.targetId)) ||
+      action.status === 'SUCCEEDED' ||
+      action.status === 'DENIED' ||
+      action.status === 'FAILED' ||
+      action.status === 'TIMED_OUT' ||
+      action.status === 'INTERRUPTED'
+    ) {
+      this.reject(socket, 'invalid_action_transition', 'Action result is not valid');
+      return;
+    }
+    const status = resultStatusToMachineStatus(message.status);
+    await this.transitionAction(action, status, {
+      completedAt: message.completedAt,
+      ...(message.result ? { result: message.result } : {}),
+      ...(message.error ? { error: message.error } : {}),
+    });
+  }
+
+  private async transitionAction(
+    action: MachineActionRecord,
+    status: MachineActionStatus,
+    fields: Partial<
+      Pick<MachineActionRecord, 'startedAt' | 'completedAt' | 'result' | 'error'>
+    > = {},
+  ): Promise<void> {
+    if (!isValidActionTransition(action.status, status)) {
+      throw new Error('invalid action transition');
+    }
+    const next = machineActionRecordSchema.parse({ ...action, ...fields, status });
+    await this.actionStore.update(next);
+    if (isTerminalActionStatus(status)) {
+      this.clearPendingAction(action.actionId);
+    }
+    const eventType = actionEventType(status);
+    if (eventType) {
+      this.emitEvent({
+        type: eventType,
+        actionId: next.actionId,
+        actionKind: next.kind,
+        targetId: next.targetId,
+        actionStatus: next.status,
+        policyRevision: next.policyRevision,
+        machineId: next.machineId,
+        ...(next.error ? { reason: next.error.code } : {}),
+      });
+    }
+  }
+
+  private async timeoutAction(actionId: string): Promise<void> {
+    const action = await this.actionStore.get(actionId);
+    if (!action || !isActiveActionStatus(action.status)) return;
+    try {
+      await this.transitionAction(action, 'TIMED_OUT', {
+        completedAt: new Date(this.now()).toISOString(),
+        error: { code: 'process_timeout', message: 'Action deadline expired at the Hub' },
+      });
+    } catch {
+      // A terminal Agent result may have won the race with the timeout timer.
+    }
+  }
+
+  private clearPendingAction(actionId: string): void {
+    const pending = this.pendingActions.get(actionId);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingActions.delete(actionId);
+  }
+
+  private async interruptActionsForSocket(socket: WebSocket): Promise<void> {
+    const candidates = [...this.pendingActions.entries()].filter(
+      ([, pending]) => pending.socket === socket,
+    );
+    for (const [actionId] of candidates) {
+      const action = await this.actionStore.get(actionId);
+      if (!action || !isActiveActionStatus(action.status)) continue;
+      try {
+        await this.transitionAction(action, 'INTERRUPTED', {
+          completedAt: new Date(this.now()).toISOString(),
+        });
+      } catch {
+        // A terminal result may have won the disconnect race.
+      }
+    }
+  }
+
+  private async interruptAllActions(): Promise<void> {
+    const candidates = [...this.pendingActions.keys()];
+    for (const actionId of candidates) {
+      const action = await this.actionStore.get(actionId);
+      if (!action || !isActiveActionStatus(action.status)) continue;
+      try {
+        await this.transitionAction(action, 'INTERRUPTED', {
+          completedAt: new Date(this.now()).toISOString(),
+        });
+      } catch {
+        // A terminal result may have won the shutdown race.
+      }
+    }
   }
 
   private async updateHeartbeat(
@@ -523,6 +773,7 @@ export class MachineHub {
 
   private async closeConnections(): Promise<void> {
     const sockets = [...this.connections];
+    const interrupted = this.interruptAllActions();
     for (const socket of sockets) {
       const state = this.connectionStates.get(socket);
       if (state) {
@@ -540,6 +791,7 @@ export class MachineHub {
       graceTimer = setTimeout(resolve, this.shutdownGraceMs);
     });
     await Promise.race([closeWait, gracePeriod]);
+    await interrupted;
     if (graceTimer) clearTimeout(graceTimer);
     for (const socket of [...this.connections]) {
       socket.terminate();
@@ -571,6 +823,7 @@ export class MachineHub {
     if (!session || state.disconnectedEventEmitted) return;
     if (this.sessions.get(session.machineId)?.socket === socket) {
       this.sessions.delete(session.machineId);
+      void this.interruptActionsForSocket(socket);
       state.disconnectedEventEmitted = true;
       this.emitEvent({
         type: 'agent.disconnected',
@@ -632,6 +885,65 @@ function delay(milliseconds: number): Promise<void> {
 
 export function createAgentWebSocketServer(): WebSocketServer {
   return new WebSocketServer({ noServer: true, maxPayload: AGENT_MAX_MESSAGE_BYTES });
+}
+
+export type MachineActionDispatchErrorCode =
+  'machine_not_found' | 'machine_offline' | 'target_not_found' | 'action_busy';
+
+export class MachineActionDispatchError extends Error {
+  constructor(
+    readonly code: MachineActionDispatchErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'MachineActionDispatchError';
+  }
+}
+
+function actionTimeoutMs(kind: MachineActionInput['kind']): number {
+  return kind === 'repo.status' ? 10_000 : 20_000;
+}
+
+function resultStatusToMachineStatus(status: AgentActionResult['status']): MachineActionStatus {
+  const statuses: Record<AgentActionResult['status'], MachineActionStatus> = {
+    succeeded: 'SUCCEEDED',
+    denied: 'DENIED',
+    failed: 'FAILED',
+    timed_out: 'TIMED_OUT',
+  };
+  return statuses[status];
+}
+
+function isTerminalActionStatus(status: MachineActionStatus): boolean {
+  return ['SUCCEEDED', 'DENIED', 'FAILED', 'TIMED_OUT', 'INTERRUPTED'].includes(status);
+}
+
+function isActiveActionStatus(status: MachineActionStatus): boolean {
+  return status === 'PENDING' || status === 'RUNNING';
+}
+
+function isValidActionTransition(from: MachineActionStatus, to: MachineActionStatus): boolean {
+  if (from === 'PENDING') return to === 'RUNNING' || isTerminalActionStatus(to);
+  if (from === 'RUNNING') return isTerminalActionStatus(to);
+  return false;
+}
+
+function actionEventType(
+  status: MachineActionStatus,
+): Extract<MachineAuditEventType, `agent.action_${string}`> | undefined {
+  const eventTypes: Record<
+    MachineActionStatus,
+    Extract<MachineAuditEventType, `agent.action_${string}`> | undefined
+  > = {
+    RUNNING: 'agent.action_accepted',
+    SUCCEEDED: 'agent.action_succeeded',
+    DENIED: 'agent.action_denied',
+    FAILED: 'agent.action_failed',
+    TIMED_OUT: 'agent.action_timed_out',
+    INTERRUPTED: 'agent.action_interrupted',
+    PENDING: 'agent.action_requested',
+  };
+  return eventTypes[status];
 }
 
 function timingSafeStringEqual(left: string, right: string): boolean {

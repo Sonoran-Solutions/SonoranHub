@@ -1,9 +1,11 @@
-import { useEffect, useState, type MouseEvent } from 'react';
+import { useEffect, useState, type Dispatch, type MouseEvent, type SetStateAction } from 'react';
 
 import type {
   CapacityCurrentProvider,
   CapacityCurrentResponse,
   CapacityResource,
+  MachineActionInput,
+  MachineActionRecord,
   MachineSummary,
   MachinesResponse,
 } from '@sonoran-hub/contracts';
@@ -232,6 +234,8 @@ function MachinesPage() {
 }
 
 function MachineCard({ machine }: { machine: MachineSummary }) {
+  const [actions, setActions] = useState<Record<string, MachineActionRecord>>({});
+  const [confirmingService, setConfirmingService] = useState<string | undefined>();
   const memory =
     machine.telemetry?.memoryTotalBytes !== undefined
       ? `${formatBytes(machine.telemetry.memoryUsedBytes ?? 0)} / ${formatBytes(machine.telemetry.memoryTotalBytes)}`
@@ -289,8 +293,228 @@ function MachineCard({ machine }: { machine: MachineSummary }) {
         <span>Protocol v{machine.protocolVersion}</span>
         <span>{machine.identity.id}</span>
       </div>
+      <section aria-labelledby={`${machine.identity.id}-actions`} className="machine-actions">
+        <div className="action-section-heading">
+          <div>
+            <p className="eyebrow">Typed remote actions</p>
+            <h4 id={`${machine.identity.id}-actions`}>Local policy targets</h4>
+          </div>
+          <span className="muted">Agent decides locally</span>
+        </div>
+        {machine.actionCatalog.repositories.length === 0 &&
+        machine.actionCatalog.services.length === 0 ? (
+          <p className="muted">No remote action targets are advertised by this Agent.</p>
+        ) : null}
+        <div className="action-target-list">
+          {machine.actionCatalog.repositories.map((target) => (
+            <ActionTargetRow
+              action={actions[`repo.status:${target.id}`]}
+              disabled={machine.status !== 'ONLINE'}
+              key={`repo.status:${target.id}`}
+              label={target.label}
+              onAction={() =>
+                void submitMachineAction(
+                  machine.identity.id,
+                  { kind: 'repo.status', targetId: target.id },
+                  actions,
+                  setActions,
+                )
+              }
+              resultLabel={repoStatusLabel(actions[`repo.status:${target.id}`])}
+              title="Repository"
+              actionLabel="Check status"
+            />
+          ))}
+          {machine.actionCatalog.services.map((target) => {
+            const key = `service.restart:${target.id}`;
+            const action = actions[key];
+            return (
+              <div className="action-target" key={key}>
+                <div>
+                  <span className="action-target-kind">Service</span>
+                  <strong>{target.label}</strong>
+                </div>
+                {confirmingService === target.id ? (
+                  <div
+                    className="action-confirmation"
+                    role="alertdialog"
+                    aria-label={`Restart ${target.label}`}
+                  >
+                    <span>This will temporarily interrupt the configured user service.</span>
+                    <div className="action-buttons">
+                      <button
+                        className="button button-muted"
+                        onClick={() => setConfirmingService(undefined)}
+                        type="button"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        className="button button-danger"
+                        disabled={machine.status !== 'ONLINE' || actionIsActive(action)}
+                        onClick={() => {
+                          setConfirmingService(undefined);
+                          void submitMachineAction(
+                            machine.identity.id,
+                            { kind: 'service.restart', targetId: target.id },
+                            actions,
+                            setActions,
+                          );
+                        }}
+                        type="button"
+                      >
+                        Restart
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    className="button button-danger"
+                    disabled={machine.status !== 'ONLINE' || actionIsActive(action)}
+                    onClick={() => setConfirmingService(target.id)}
+                    type="button"
+                  >
+                    Restart
+                  </button>
+                )}
+                {action ? (
+                  <ActionResult action={action} resultLabel={serviceStatusLabel(action)} />
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </section>
     </article>
   );
+}
+
+function ActionTargetRow({
+  action,
+  actionLabel,
+  disabled,
+  label,
+  onAction,
+  resultLabel,
+  title,
+}: {
+  action: MachineActionRecord | undefined;
+  actionLabel: string;
+  disabled: boolean;
+  label: string;
+  onAction: () => void;
+  resultLabel: string | undefined;
+  title: string;
+}) {
+  return (
+    <div className="action-target">
+      <div>
+        <span className="action-target-kind">{title}</span>
+        <strong>{label}</strong>
+      </div>
+      <div className="action-control">
+        <button
+          className="button"
+          disabled={disabled || actionIsActive(action)}
+          onClick={onAction}
+          type="button"
+        >
+          {actionIsActive(action) ? actionStatusLabel(action?.status ?? 'PENDING') : actionLabel}
+        </button>
+        {action ? <ActionResult action={action} resultLabel={resultLabel} /> : null}
+      </div>
+    </div>
+  );
+}
+
+function ActionResult({
+  action,
+  resultLabel,
+}: {
+  action: MachineActionRecord;
+  resultLabel?: string;
+}) {
+  return (
+    <div className={`action-result action-result-${action.status.toLowerCase()}`} role="status">
+      <span>{actionStatusLabel(action.status)}</span>
+      {resultLabel ? <strong>{resultLabel}</strong> : null}
+      {action.error ? <small>{action.error.message}</small> : null}
+    </div>
+  );
+}
+
+async function submitMachineAction(
+  machineId: string,
+  input: MachineActionInput,
+  current: Record<string, MachineActionRecord>,
+  setActions: Dispatch<SetStateAction<Record<string, MachineActionRecord>>>,
+): Promise<void> {
+  const key = `${input.kind}:${input.targetId}`;
+  try {
+    const response = await fetch(
+      `${apiBaseUrl}/machines/${encodeURIComponent(machineId)}/actions`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+    );
+    if (!response.ok) throw new Error('The Hub could not dispatch this action.');
+    const action = (await response.json()) as MachineActionRecord;
+    setActions({ ...current, [key]: action });
+    await watchMachineAction(action.actionId, key, setActions);
+  } catch (error) {
+    const fallback: MachineActionRecord = {
+      actionId: crypto.randomUUID(),
+      machineId,
+      kind: input.kind,
+      targetId: input.targetId,
+      status: 'FAILED',
+      policyRevision: 'sha256:' + '0'.repeat(64),
+      requestedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+      error: {
+        code: 'process_start_failed',
+        message: error instanceof Error ? error.message : 'Action dispatch failed',
+      },
+    };
+    setActions({ ...current, [key]: fallback });
+  }
+}
+
+async function watchMachineAction(
+  actionId: string,
+  key: string,
+  setActions: Dispatch<SetStateAction<Record<string, MachineActionRecord>>>,
+): Promise<void> {
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+    const response = await fetch(`${apiBaseUrl}/actions/${encodeURIComponent(actionId)}`);
+    if (!response.ok) return;
+    const action = (await response.json()) as MachineActionRecord;
+    setActions((previous) => ({ ...previous, [key]: action }));
+    if (['SUCCEEDED', 'DENIED', 'FAILED', 'TIMED_OUT', 'INTERRUPTED'].includes(action.status))
+      return;
+  }
+}
+
+function actionIsActive(action: MachineActionRecord | undefined): boolean {
+  return action?.status === 'PENDING' || action?.status === 'RUNNING';
+}
+
+function actionStatusLabel(status: MachineActionRecord['status']): string {
+  return status === 'TIMED_OUT' ? 'Timed out' : status[0] + status.slice(1).toLowerCase();
+}
+
+function repoStatusLabel(action: MachineActionRecord | undefined): string | undefined {
+  const result = action?.result;
+  if (!result || result.kind !== 'repo.status') return undefined;
+  return `${result.branch ?? (result.detached ? 'detached HEAD' : 'unknown branch')} · ${result.dirty ? `${result.staged + result.unstaged + result.untracked} changes` : 'clean'}${result.ahead ? ` · ahead ${result.ahead}` : ''}`;
+}
+
+function serviceStatusLabel(action: MachineActionRecord): string | undefined {
+  const result = action.result;
+  return result?.kind === 'service.restart' ? (result.active ? 'active' : 'inactive') : undefined;
 }
 
 function CapacityStateView({

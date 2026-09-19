@@ -2,6 +2,7 @@ import { buildApp } from './app.js';
 import { createCapacityRuntime } from './capacity.js';
 import { parseAllowedOrigins } from './cors.js';
 import { PostgresMachineStore } from './machines.js';
+import { PostgresMachineActionStore } from './actions.js';
 import { createStructuredLogger, loadConfig } from '@sonoran-hub/config';
 import pg from 'pg';
 
@@ -19,6 +20,7 @@ const app = buildApp(config, {
   capacityService: capacity.service,
   allowedOrigins: parseAllowedOrigins(process.env.WEB_ORIGIN),
   machineStore: machinePool ? new PostgresMachineStore(machinePool) : undefined,
+  machineActionStore: machinePool ? new PostgresMachineActionStore(machinePool) : undefined,
   agentToken: process.env.SONORAN_AGENT_TOKEN,
 });
 

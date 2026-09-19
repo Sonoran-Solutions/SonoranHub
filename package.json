@@ -19,6 +19,7 @@
     "smoke:openrouter": "pnpm build:packages && node scripts/smoke-openrouter.mjs",
     "smoke:codex": "pnpm build:packages && node scripts/smoke-codex.mjs",
     "smoke:gemini": "pnpm build:packages && node scripts/smoke-gemini.mjs",
+    "smoke:agent-actions": "pnpm build:packages && node scripts/smoke-agent-actions.mjs",
     "format": "prettier --write \"**/*.{js,ts,tsx,json,css,yml,yaml}\"",
     "format:check": "prettier --check \"**/*.{js,ts,tsx,json,css,yml,yaml}\"",
     "lint": "eslint .",

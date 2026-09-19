@@ -12,13 +12,24 @@ import {
   machineTelemetrySchema,
   type AgentHeartbeat,
   type AgentHello,
+  type AgentActionAccepted,
+  type AgentActionResult,
   type MachineCapability,
   type MachineIdentity,
   type MachineTelemetry,
 } from '@sonoran-hub/contracts';
 import WebSocket from 'ws';
 
-export const AGENT_VERSION = '0.2.0';
+import { AgentActionExecutor, type ProcessRunner } from './actions.js';
+import {
+  createPolicyRevision as createLocalPolicyRevision,
+  loadAgentPolicy,
+  policyCapabilities,
+  policyCatalog,
+  type AgentPolicy,
+} from './policy.js';
+
+export const AGENT_VERSION = '0.3.0';
 const DEFAULT_HUB_URL = 'ws://127.0.0.1:3000/agent/ws';
 const DEFAULT_STATE_DIR = join(homedir(), '.sonoran-agent', 'state');
 
@@ -39,6 +50,9 @@ export interface AgentClientOptions {
   readonly machineName?: string;
   readonly agentVersion?: string;
   readonly capabilities?: readonly MachineCapability[];
+  readonly policy?: AgentPolicy;
+  readonly policyPath?: string;
+  readonly processRunner?: ProcessRunner;
   readonly stateDir?: string;
   readonly heartbeatIntervalMs?: number;
   readonly diskPaths?: readonly string[];
@@ -53,11 +67,23 @@ export interface AgentClientOptions {
 export const DEFAULT_AGENT_CAPABILITIES: readonly MachineCapability[] = ['machine.read.telemetry'];
 
 export function createPolicyRevision(
-  capabilities: readonly MachineCapability[] = DEFAULT_AGENT_CAPABILITIES,
+  policy: AgentPolicy,
+  capabilities?: readonly MachineCapability[],
+): string;
+export function createPolicyRevision(capabilities?: readonly MachineCapability[]): string;
+export function createPolicyRevision(
+  policyOrCapabilities: AgentPolicy | readonly MachineCapability[] = DEFAULT_AGENT_CAPABILITIES,
+  capabilities?: readonly MachineCapability[],
 ): string {
-  const canonical = JSON.stringify({ capabilities: [...new Set(capabilities)].sort() });
+  if (!Array.isArray(policyOrCapabilities)) {
+    return createLocalPolicyRevision(policyOrCapabilities as AgentPolicy, capabilities);
+  }
+  const canonical = JSON.stringify({ capabilities: [...new Set(policyOrCapabilities)].sort() });
   return `sha256:${createHash('sha256').update(canonical, 'utf8').digest('hex')}`;
 }
+
+export { loadAgentPolicy } from './policy.js';
+export type { AgentPolicy, RepositoryPolicy, ServicePolicy } from './policy.js';
 
 export function createStartupStatus(): AgentStartupStatus {
   return { status: 'started', service: 'sonoran-agent', version: AGENT_VERSION };
@@ -241,6 +267,8 @@ export class AgentClient {
   private handshakeAcceptedGeneration: number | undefined;
   private hello: AgentHello | undefined;
   private collecting = false;
+  private actionExecutor: AgentActionExecutor | undefined;
+  private localPolicy: AgentPolicy | undefined;
 
   constructor(options: AgentClientOptions = {}) {
     this.options = options;
@@ -265,24 +293,37 @@ export class AgentClient {
     this.options.onState?.('connecting');
 
     let identity: MachineIdentity;
+    let policy: AgentPolicy;
     try {
       identity = await createMachineIdentity(this.options);
+      policy =
+        this.localPolicy ??
+        this.options.policy ??
+        (await loadAgentPolicy({
+          path: this.options.policyPath,
+          explicit: this.options.policyPath !== undefined,
+        }));
+      this.localPolicy = policy;
     } catch (error) {
       this.connecting = false;
       this.running = false;
       throw error;
     }
     if (!this.isCurrentGeneration(generation)) return;
-    const capabilities = [
-      ...new Set(this.options.capabilities ?? DEFAULT_AGENT_CAPABILITIES),
-    ].sort();
+    const capabilities = policyCapabilities(policy);
+    const actionCatalog = policyCatalog(policy, capabilities);
+    this.actionExecutor ??= new AgentActionExecutor({
+      policy,
+      processRunner: this.options.processRunner,
+    });
     this.hello = {
       type: 'agent.hello',
       protocolVersion: AGENT_PROTOCOL_VERSION,
       agentVersion: this.options.agentVersion ?? AGENT_VERSION,
       machine: identity,
       capabilities,
-      policyRevision: createPolicyRevision(capabilities),
+      policyRevision: createLocalPolicyRevision(policy, capabilities),
+      actionCatalog,
     };
     const WebSocketImpl = this.options.WebSocketImpl ?? WebSocket;
     let socket: WebSocket;
@@ -345,6 +386,28 @@ export class AgentClient {
       this.failCurrentConnection(generation);
       return;
     }
+    if (parsed.data.type === 'agent.action.request') {
+      if (this.handshakeAcceptedGeneration !== generation || !this.actionExecutor) {
+        this.failCurrentConnection(
+          generation,
+          new Error('Action request received before handshake'),
+        );
+        return;
+      }
+      const execution = this.actionExecutor.execute(parsed.data);
+      if (!execution.accepted) {
+        this.send(generation, execution.result);
+        return;
+      }
+      this.send(generation, {
+        type: 'agent.action.accepted',
+        protocolVersion: AGENT_PROTOCOL_VERSION,
+        actionId: parsed.data.actionId,
+        acceptedAt: new Date().toISOString(),
+      });
+      void execution.result.then((result) => this.send(generation, result));
+      return;
+    }
     if (this.handshakeAcceptedGeneration === generation) {
       this.failCurrentConnection(generation, new Error('Unexpected duplicate Agent acceptance'));
       return;
@@ -393,7 +456,10 @@ export class AgentClient {
     }
   }
 
-  private send(generation: number, message: AgentHello | AgentHeartbeat): void {
+  private send(
+    generation: number,
+    message: AgentHello | AgentHeartbeat | AgentActionAccepted | AgentActionResult,
+  ): void {
     if (this.isCurrentGeneration(generation) && this.socket?.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify(message));
     }
@@ -460,6 +526,7 @@ if (process.argv[1]?.endsWith('/index.ts') || process.argv[1]?.endsWith('/index.
           ? Number(process.env.SONORAN_AGENT_HEARTBEAT_MS)
           : AGENT_HEARTBEAT_INTERVAL_MS,
         diskPaths: parseDiskPaths(process.env.SONORAN_AGENT_DISK_PATHS),
+        policyPath: process.env.SONORAN_AGENT_POLICY_PATH?.trim() || undefined,
         onError: (error) => console.error(JSON.stringify({ ...status, error: error.message })),
       });
       void client.connect().catch((error: unknown) => {

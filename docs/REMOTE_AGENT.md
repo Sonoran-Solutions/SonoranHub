@@ -8,14 +8,24 @@ The most important rule is:
 
 This prevents a compromised Hub session from automatically becoming unrestricted host access.
 
-## Phase 1A boundary
+## Phase 1B boundary
 
-The implemented Phase 1A Agent is read-only: it advertises only
-`machine.read.telemetry`, publishes bounded telemetry, and maintains an
-authenticated outbound WebSocket session. It does not expose action RPCs,
-shell access, process or service control, repository operations, task
-execution, worker execution, reboot/shutdown, or enrollment UI. Those remain
-deferred to Phase 1B or later.
+The Agent protocol is v2. It advertises telemetry plus only the actions enabled
+by its local policy: `repo.status` through `repo.read` and
+`service.restart` through `service.restart.allowed`. There is no shell,
+arbitrary executable, process control, root/systemd control, Git mutation, task
+execution, worker execution, reboot/shutdown, or enrollment UI.
+
+The local policy is JSON at `~/.sonoran-agent/policy.json` by default, or at
+`SONORAN_AGENT_POLICY_PATH`. A missing default policy is valid telemetry-only
+operation. An explicitly configured missing or malformed policy fails startup.
+Repository paths and service units are resolved only by the Agent and never
+cross the wire. The safe catalog contains only target IDs and labels.
+
+The policy revision is a SHA-256 fingerprint of normalized capabilities and all
+authorization-relevant target mappings. It is sent in hello and every action
+request/result; a stale request is denied as `policy_changed`. Policy changes
+require an Agent restart/reconnect in this phase.
 
 The Hub owns active session shutdown. It stops processing new Agent messages,
 requests a bounded graceful close with `hub_shutdown`, terminates hung sockets,
@@ -63,15 +73,33 @@ Handshake should include:
 
 ```json
 {
-  "protocolVersion": 1,
+  "protocolVersion": 2,
   "agentVersion": "0.x",
   "machineId": "stable-generated-id",
   "machineName": "developer-friendly-name",
   "platform": "linux",
   "capabilities": [],
-  "policyRevision": "hash-or-version"
+  "policyRevision": "sha256:...",
+  "actionCatalog": {
+    "repositories": [{ "id": "sonoran-hub", "label": "Sonoran Hub" }],
+    "services": [{ "id": "hub-api", "label": "Hub API" }]
+  }
 }
 ```
+
+Typed remote actions are `repo.status` and `service.restart`. The Hub sends a
+logical target ID, an immutable UUID action ID, the live policy revision, and a
+deadline. The Agent performs validation in order, sends `accepted` only after
+authorization, then sends exactly one terminal result. It runs Git as
+`git -C <Agent-local-policy-path> status --porcelain=v2 --branch`, and a
+service restart as `systemctl --user restart <Agent-local-policy-unit>` followed
+by `systemctl --user is-active <Agent-local-policy-unit>`, always with
+`shell: false` and bounded process output/timeouts.
+
+There is at most one active action per Agent. Disconnects, session replacement,
+and Hub shutdown mark unresolved Hub actions `INTERRUPTED`; the Hub never
+replays them. A service may already have restarted when a connection drops, so
+network ambiguity is intentionally not retried.
 
 Hub must reject unsupported protocol versions cleanly.
 

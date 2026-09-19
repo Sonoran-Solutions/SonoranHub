@@ -141,15 +141,24 @@ Securely establish the remote-control primitive without arbitrary shell exposure
 Implemented: authenticated outbound Agent transport, versioned hello/heartbeat
 contracts, stable machine identity, bounded CPU/RAM/disk/uptime telemetry,
 PostgreSQL machine metadata/latest telemetry persistence, live
-ONLINE/STALE/OFFLINE semantics, and responsive Home/Machines views. Remote
-actions, enrollment UI, repository operations, workers, and task execution
-remain deferred to later phases.
+ONLINE/STALE/OFFLINE semantics, and responsive Home/Machines views. Enrollment
+UI, workers, and task execution remain deferred to later phases.
 
 Phase 1A hardening also provides bounded Hub-owned Agent shutdown, terminal
 protocol rejection, persisted protocol-version metadata, configured statfs
 disk paths, and an injectable lifecycle/security event sink. These events are
-structured hooks only; no durable audit history or remote-action protocol is
-implemented.
+structured hooks only; Phase 1B adds durable action records without turning the
+event sink into a full audit-history platform.
+
+### Phase 1B status
+
+Implemented typed policy-enforced remote actions: read-only `repo.status` and
+user-level-systemd-only `service.restart`. Agent protocol v2 carries a safe
+target catalog and immutable action lifecycle messages. Hub action records are
+durable, audited through the existing event seam, and never automatically
+replayed across disconnect or session replacement. Arbitrary shell, root/system
+services, Git mutation, task execution, workers, enrollment, and machine power
+control remain deferred.
 
 ### Work
 
@@ -180,15 +189,15 @@ Do not block the phase on perfect cross-platform GPU support.
 
 #### Capability policy
 
-Phase 1A advertises only the read-only telemetry capability. Broader local
-capabilities remain future work:
+Phase 1A advertised only telemetry. Phase 1B adds the two policy-derived
+capabilities below; all other capabilities remain future work:
 
 - [x] `machine.read.telemetry`
 - `process.read`
 - `process.stop.allowed`
 - `service.read`
-- `service.restart.allowed`
-- `repo.read`
+- `service.restart.allowed` (Phase 1B, local user-systemd targets only)
+- `repo.read` (Phase 1B, local repository targets only)
 - `repo.test.allowed`
 - `task.execute`
 - `machine.reboot`
@@ -196,11 +205,12 @@ capabilities remain future work:
 
 The Agent advertises granted capabilities to Hub.
 
-#### Remote actions
+#### Phase 1B remote actions
 
-Remote actions and their audit events are explicitly deferred. This phase
-does not define an action RPC, arbitrary shell, process/service control, or
-repository operation.
+Typed `repo.status` and `service.restart` are implemented with local policy
+authorization, bounded fixed subprocesses, durable action lifecycle records,
+safe audit metadata, and no automatic retry. Arbitrary shell, process control,
+Git mutation, root/system services, and machine power control remain deferred.
 
 ### Exit criteria
 
@@ -208,7 +218,7 @@ repository operation.
 - Hub correctly distinguishes online/stale/offline.
 - Mobile can view fresh main-PC telemetry.
 - API restart leaves persisted machines offline until their Agents reconnect.
-- No remote-action protocol is exposed.
+- Phase 1B actions remain limited to the typed policy-enforced catalog.
 
 ---
 

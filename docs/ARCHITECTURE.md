@@ -395,3 +395,14 @@ For early personal use, keep deployment boring:
 - secrets injected through environment/secret-store configuration rather than repository files.
 
 Do not introduce Kubernetes, a message broker, or a fleet scheduler until actual scale requires them.
+## Phase 1B typed actions
+
+The Agent WebSocket protocol is version 2. A hello advertises a bounded safe
+action catalog containing only logical IDs and labels. `MachineHub` dispatches a
+typed `repo.status` or `service.restart` request, persists it in
+`machine_actions`, correlates accepted/result messages to the active socket,
+and marks unresolved actions interrupted on disconnect, session replacement,
+or bounded Hub shutdown. Pending WebSocket objects are never persisted.
+
+The local Agent policy is the authority for paths, service units, and enabled
+capabilities. The Hub catalog is an early UX check, not a security boundary.

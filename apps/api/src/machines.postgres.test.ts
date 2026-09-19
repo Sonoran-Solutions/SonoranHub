@@ -3,6 +3,7 @@ import pg from 'pg';
 
 import type { MachineTelemetry } from '@sonoran-hub/contracts';
 
+import { PostgresMachineActionStore } from './actions.js';
 import { PostgresMachineStore, type PersistedMachine } from './machines.js';
 
 const { Pool } = pg;
@@ -20,6 +21,7 @@ const machine: PersistedMachine = {
   agentVersion: '0.2.0',
   capabilities: ['machine.read.telemetry'],
   policyRevision: 'sha256:test',
+  actionCatalog: { repositories: [], services: [] },
   lastSeenAt: '2026-09-15T12:00:00.000Z',
   telemetry: {
     capturedAt: '2026-09-15T12:00:00.000Z',
@@ -37,10 +39,6 @@ describe.skipIf(!hasDatabase)('PostgresMachineStore', () => {
   beforeAll(async () => {
     await pool?.query('TRUNCATE TABLE machines');
     store = new PostgresMachineStore(pool!);
-  });
-
-  afterAll(async () => {
-    await pool?.end();
   });
 
   it('round trips machine metadata and latest telemetry', async () => {
@@ -61,4 +59,58 @@ describe.skipIf(!hasDatabase)('PostgresMachineStore', () => {
       { ...machine, lastSeenAt: '2026-09-15T12:00:01.000Z', telemetry: updatedTelemetry },
     ]);
   });
+});
+
+describe.skipIf(!hasDatabase)('PostgresMachineActionStore', () => {
+  let machineStore: PostgresMachineStore;
+  let actionStore: PostgresMachineActionStore;
+
+  beforeAll(async () => {
+    await pool?.query('TRUNCATE TABLE machine_actions, machines');
+    machineStore = new PostgresMachineStore(pool!);
+    actionStore = new PostgresMachineActionStore(pool!);
+    await machineStore.upsert(machine);
+  });
+
+  it('persists lifecycle updates and reloads terminal actions', async () => {
+    const action = {
+      actionId: 'f8b8f11c-87e4-4d31-8d43-7e2990eea123',
+      machineId: machine.identity.id,
+      kind: 'repo.status' as const,
+      targetId: 'repo',
+      status: 'PENDING' as const,
+      policyRevision: `sha256:${'a'.repeat(64)}`,
+      requestedAt: '2026-09-15T12:00:00.000Z',
+    };
+    await actionStore.create(action);
+    await actionStore.update({
+      ...action,
+      status: 'RUNNING',
+      startedAt: '2026-09-15T12:00:01.000Z',
+    });
+    await actionStore.update({
+      ...action,
+      status: 'SUCCEEDED',
+      startedAt: '2026-09-15T12:00:01.000Z',
+      completedAt: '2026-09-15T12:00:02.000Z',
+      result: {
+        kind: 'repo.status',
+        targetId: 'repo',
+        branch: 'main',
+        detached: false,
+        dirty: false,
+        ahead: 0,
+        behind: 0,
+        staged: 0,
+        unstaged: 0,
+        untracked: 0,
+      },
+    });
+    await expect(actionStore.get(action.actionId)).resolves.toMatchObject({ status: 'SUCCEEDED' });
+    await expect(actionStore.listForMachine(machine.identity.id)).resolves.toHaveLength(1);
+  });
+});
+
+afterAll(async () => {
+  await pool?.end();
 });
