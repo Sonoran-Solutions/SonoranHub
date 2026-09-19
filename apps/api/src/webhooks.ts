@@ -165,14 +165,26 @@ export function registerGitHubWebhookRoutes(
 
         // 7. Ping event: record delivery, return 202, no refresh
         if (eventName === 'ping') {
-          await options.deliveryStore.recordIfNew({
+          const isNew = await options.deliveryStore.recordIfNew({
             deliveryId,
             eventName,
             repositoryOwner: owner,
             repositoryName: repo,
             outcome: 'ignored',
             receivedAt: nowIso,
+            processedAt: nowIso,
           });
+          if (!isNew) {
+            options.logger?.info('github.webhook.duplicate', {
+              metadata: {
+                deliveryId,
+                eventName,
+                repository: owner && repo ? `${owner}/${repo}` : undefined,
+              },
+            });
+            reply.code(202);
+            return { status: 'duplicate', deliveryId };
+          }
           health.lastAcceptedAt = nowIso;
           reply.code(202);
           return { status: 'accepted', event: 'ping' };
@@ -180,14 +192,26 @@ export function registerGitHubWebhookRoutes(
 
         // 8. Unknown / unhandled event: record delivery, return 202, no refresh
         if (!RELEVANT_GITHUB_EVENTS.has(eventName)) {
-          await options.deliveryStore.recordIfNew({
+          const isNew = await options.deliveryStore.recordIfNew({
             deliveryId,
             eventName,
             repositoryOwner: owner,
             repositoryName: repo,
             outcome: 'ignored',
             receivedAt: nowIso,
+            processedAt: nowIso,
           });
+          if (!isNew) {
+            options.logger?.info('github.webhook.duplicate', {
+              metadata: {
+                deliveryId,
+                eventName,
+                repository: owner && repo ? `${owner}/${repo}` : undefined,
+              },
+            });
+            reply.code(202);
+            return { status: 'duplicate', deliveryId };
+          }
           options.logger?.info('github.webhook.ignored', {
             metadata: { deliveryId, eventName, reason: 'unhandled_event' },
           });
@@ -197,12 +221,20 @@ export function registerGitHubWebhookRoutes(
 
         // 9. Missing repository envelope for relevant event: record ignored, no refresh
         if (!owner || !repo) {
-          await options.deliveryStore.recordIfNew({
+          const isNew = await options.deliveryStore.recordIfNew({
             deliveryId,
             eventName,
             outcome: 'ignored',
             receivedAt: nowIso,
+            processedAt: nowIso,
           });
+          if (!isNew) {
+            options.logger?.info('github.webhook.duplicate', {
+              metadata: { deliveryId, eventName },
+            });
+            reply.code(202);
+            return { status: 'duplicate', deliveryId };
+          }
           options.logger?.info('github.webhook.ignored', {
             metadata: { deliveryId, eventName, reason: 'missing_repository' },
           });
@@ -210,27 +242,29 @@ export function registerGitHubWebhookRoutes(
           return { status: 'ignored', reason: 'missing_repository' };
         }
 
-        // 10. Deduplicate delivery ID
-        const isNew = await options.deliveryStore.recordIfNew({
-          deliveryId,
-          eventName,
-          repositoryOwner: owner,
-          repositoryName: repo,
-          outcome: 'accepted',
-          receivedAt: nowIso,
-        });
-
-        if (!isNew) {
-          options.logger?.info('github.webhook.duplicate', {
-            metadata: { deliveryId, eventName, repository: `${owner}/${repo}` },
-          });
-          reply.code(202);
-          return { status: 'duplicate', deliveryId };
-        }
-
-        // 11. Configured repository check
+        // 10. Configured repository check
         const isConfiguredRepo = await options.projectService.isRepositoryConfigured(owner, repo);
         if (!isConfiguredRepo) {
+          const isNew = await options.deliveryStore.recordIfNew({
+            deliveryId,
+            eventName,
+            repositoryOwner: owner,
+            repositoryName: repo,
+            outcome: 'ignored',
+            receivedAt: nowIso,
+            processedAt: nowIso,
+          });
+          if (!isNew) {
+            options.logger?.info('github.webhook.duplicate', {
+              metadata: {
+                deliveryId,
+                eventName,
+                repository: `${owner}/${repo}`,
+              },
+            });
+            reply.code(202);
+            return { status: 'duplicate', deliveryId };
+          }
           options.logger?.info('github.webhook.ignored', {
             metadata: {
               deliveryId,
@@ -241,6 +275,25 @@ export function registerGitHubWebhookRoutes(
           });
           reply.code(202);
           return { status: 'ignored', reason: 'unconfigured_repository' };
+        }
+
+        // 11. Deduplicate configured delivery ID
+        const isNew = await options.deliveryStore.recordIfNew({
+          deliveryId,
+          eventName,
+          repositoryOwner: owner,
+          repositoryName: repo,
+          outcome: 'accepted',
+          receivedAt: nowIso,
+          processedAt: nowIso,
+        });
+
+        if (!isNew) {
+          options.logger?.info('github.webhook.duplicate', {
+            metadata: { deliveryId, eventName, repository: `${owner}/${repo}` },
+          });
+          reply.code(202);
+          return { status: 'duplicate', deliveryId };
         }
 
         // 12. Enqueue targeted refresh

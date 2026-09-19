@@ -442,7 +442,7 @@ describe('ProjectService & Store', () => {
     service.stop();
   });
 
-  it('retains previous snapshot as stale when targeted refresh hits rate limit', async () => {
+  it('persists previous normalized data with stale freshness when targeted refresh hits rate limit', async () => {
     const store = new InMemoryProjectStore();
     const source = new FakeGitHubProjectSource();
     source.setRepository({
@@ -457,6 +457,10 @@ describe('ProjectService & Store', () => {
       pushedAt: '2026-09-18T10:00:00.000Z',
       url: 'https://github.com/Sonoran-Solutions/SonoranHub',
     });
+    source.setCiState('Sonoran-Solutions', 'SonoranHub', {
+      status: 'success',
+      conclusion: 'success',
+    });
 
     const adapter = new GitHubAdapter(source);
     const service = new ProjectService({
@@ -470,6 +474,8 @@ describe('ProjectService & Store', () => {
 
     const initialSnapshot = await store.getLatestGitHubSnapshot('sonoran-hub');
     expect(initialSnapshot?.freshness).toBe('fresh');
+    expect(initialSnapshot?.data.repositories[0]?.freshness).toBe('fresh');
+    expect(initialSnapshot?.data.repositories[0]?.ciState).toBe('success');
 
     // Simulate rate limit
     source.setRateLimit({
@@ -478,12 +484,110 @@ describe('ProjectService & Store', () => {
       resetAt: new Date(Date.now() + 60_000).toISOString(),
     });
 
+    // Spy on collectRepository to verify no GitHub collection API is invoked while rate-limited
+    const collectSpy = vi.spyOn(adapter, 'collectRepository');
+
     await service.refreshRepository('Sonoran-Solutions', 'SonoranHub');
 
-    // Previous snapshot still retained
+    expect(collectSpy).not.toHaveBeenCalled();
+
+    // New persisted snapshot exists reflecting stale state
     const afterRateLimitSnapshot = await store.getLatestGitHubSnapshot('sonoran-hub');
     expect(afterRateLimitSnapshot).not.toBeNull();
-    expect(afterRateLimitSnapshot?.id).toBe(initialSnapshot?.id);
+    expect(afterRateLimitSnapshot?.id).not.toBe(initialSnapshot?.id);
+
+    // Repository freshness is marked stale, but normalized data is preserved
+    const repoSnapshot = afterRateLimitSnapshot?.data.repositories[0];
+    expect(repoSnapshot?.freshness).toBe('stale');
+    expect(repoSnapshot?.ciState).toBe('success');
+    expect(repoSnapshot?.snapshot?.defaultBranch).toBe('main');
+    expect(repoSnapshot?.snapshot?.url).toBe('https://github.com/Sonoran-Solutions/SonoranHub');
+
+    // Overall project freshness is stale
+    expect(afterRateLimitSnapshot?.freshness).toBe('stale');
+
+    service.stop();
+  });
+
+  it('marks only the affected repository stale in multi-repository project when rate-limited', async () => {
+    const store = new InMemoryProjectStore();
+    const source = new FakeGitHubProjectSource();
+    source.setRepository({
+      owner: 'Sonoran-Solutions',
+      name: 'RepoA',
+      defaultBranch: 'main',
+      isPrivate: false,
+      isArchived: false,
+      description: 'Repo A',
+      primaryLanguage: 'TypeScript',
+      updatedAt: '2026-09-18T10:00:00.000Z',
+      pushedAt: '2026-09-18T10:00:00.000Z',
+      url: 'https://github.com/Sonoran-Solutions/RepoA',
+    });
+    source.setRepository({
+      owner: 'Sonoran-Solutions',
+      name: 'RepoB',
+      defaultBranch: 'main',
+      isPrivate: false,
+      isArchived: false,
+      description: 'Repo B',
+      primaryLanguage: 'TypeScript',
+      updatedAt: '2026-09-18T10:00:00.000Z',
+      pushedAt: '2026-09-18T10:00:00.000Z',
+      url: 'https://github.com/Sonoran-Solutions/RepoB',
+    });
+    source.setCiState('Sonoran-Solutions', 'RepoA', { status: 'success', conclusion: 'success' });
+    const multiRepoConfig = {
+      version: 1 as const,
+      projects: [
+        {
+          id: 'multi-repo-project',
+          name: 'Multi Repo Project',
+          attentionLabels: ['bug'],
+          repositories: [
+            { owner: 'Sonoran-Solutions', name: 'RepoA', primary: true },
+            { owner: 'Sonoran-Solutions', name: 'RepoB', primary: false },
+          ],
+        },
+      ],
+    };
+
+    const adapter = new GitHubAdapter(source);
+    const service = new ProjectService({
+      store,
+      adapter,
+      projectConfig: multiRepoConfig,
+      refreshIntervalMs: 0,
+    });
+
+    await service.start();
+
+    const initialSnapshot = await store.getLatestGitHubSnapshot('multi-repo-project');
+    expect(initialSnapshot?.freshness).toBe('fresh');
+
+    // Simulate rate limit
+    source.setRateLimit({
+      remaining: 0,
+      limit: 5000,
+      resetAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+
+    const collectSpy = vi.spyOn(adapter, 'collectRepository');
+
+    await service.refreshRepository('Sonoran-Solutions', 'RepoA');
+
+    expect(collectSpy).not.toHaveBeenCalled();
+
+    const afterSnapshot = await store.getLatestGitHubSnapshot('multi-repo-project');
+    const repoA = afterSnapshot?.data.repositories.find((r) => r.name === 'RepoA');
+    const repoB = afterSnapshot?.data.repositories.find((r) => r.name === 'RepoB');
+
+    // Repo A is marked stale; Repo B remains fresh
+    expect(repoA?.freshness).toBe('stale');
+    expect(repoB?.freshness).toBe('fresh');
+
+    // Overall project freshness follows multi-repo semantics (one stale + one fresh = stale)
+    expect(afterSnapshot?.freshness).toBe('stale');
 
     service.stop();
   });

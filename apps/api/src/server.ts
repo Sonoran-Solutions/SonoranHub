@@ -29,6 +29,7 @@ import {
   InMemoryGitHubWebhookDeliveryStore,
   PostgresGitHubWebhookDeliveryStore,
   createWebhookRetentionManager,
+  parseWebhookRetentionHours,
 } from './webhookDeliveryStore.js';
 import { GitHubRefreshCoordinator } from './refreshCoordinator.js';
 
@@ -53,9 +54,9 @@ const webhookDeliveryStore = machinePool
   ? new PostgresGitHubWebhookDeliveryStore(machinePool)
   : new InMemoryGitHubWebhookDeliveryStore();
 
-const retentionHours = process.env.GITHUB_WEBHOOK_DELIVERY_RETENTION_HOURS
-  ? Number(process.env.GITHUB_WEBHOOK_DELIVERY_RETENTION_HOURS)
-  : undefined;
+const retentionHours = parseWebhookRetentionHours(
+  process.env.GITHUB_WEBHOOK_DELIVERY_RETENTION_HOURS,
+);
 
 const webhookRetention = createWebhookRetentionManager({
   store: webhookDeliveryStore,

@@ -268,7 +268,7 @@ describe('GitHub Webhooks HTTP Route', () => {
 
   it('accepts unconfigured repository event without calling GitHub refresh', async () => {
     let refreshCalled = false;
-    const { app, refreshCoordinator, projectService } = await createTestApp({
+    const { app, deliveryStore, refreshCoordinator, projectService } = await createTestApp({
       refreshHandler: async () => {
         refreshCalled = true;
       },
@@ -294,6 +294,26 @@ describe('GitHub Webhooks HTTP Route', () => {
     expect(res.statusCode).toBe(202);
     expect(JSON.parse(res.payload).status).toBe('ignored');
     expect(refreshCalled).toBe(false);
+
+    const record = await deliveryStore.getDelivery('unconfigured-repo-delivery');
+    expect(record).not.toBeNull();
+    expect(record?.outcome).toBe('ignored');
+    expect(record?.processedAt).toBeTruthy();
+
+    // Replay of same unconfigured delivery returns duplicate status
+    const duplicateRes = await app.inject({
+      method: 'POST',
+      url: '/github/webhooks',
+      headers: {
+        'content-type': 'application/json',
+        'x-hub-signature-256': signature,
+        'x-github-delivery': 'unconfigured-repo-delivery',
+        'x-github-event': 'push',
+      },
+      payload,
+    });
+    expect(duplicateRes.statusCode).toBe(202);
+    expect(JSON.parse(duplicateRes.payload).status).toBe('duplicate');
 
     await refreshCoordinator.stop();
     projectService.stop();

@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { GitHubWebhookDeliveryRecord } from '@sonoran-hub/contracts';
 
 import {
+  DEFAULT_WEBHOOK_RETENTION_HOURS,
   InMemoryGitHubWebhookDeliveryStore,
   createWebhookRetentionManager,
+  parseWebhookRetentionHours,
 } from './webhookDeliveryStore.js';
 
 describe('InMemoryGitHubWebhookDeliveryStore', () => {
@@ -90,5 +92,41 @@ describe('InMemoryGitHubWebhookDeliveryStore', () => {
     expect(await store.getDelivery('retention-old')).toBeNull();
 
     manager.stop();
+  });
+});
+
+describe('parseWebhookRetentionHours', () => {
+  it('defaults to 168 hours when undefined or blank', () => {
+    expect(parseWebhookRetentionHours(undefined)).toBe(DEFAULT_WEBHOOK_RETENTION_HOURS);
+    expect(parseWebhookRetentionHours(undefined)).toBe(168);
+    expect(parseWebhookRetentionHours('')).toBe(168);
+    expect(parseWebhookRetentionHours('   ')).toBe(168);
+  });
+
+  it('parses valid positive integer configurations within bounds', () => {
+    expect(parseWebhookRetentionHours('1')).toBe(1);
+    expect(parseWebhookRetentionHours('72')).toBe(72);
+    expect(parseWebhookRetentionHours('168')).toBe(168);
+    expect(parseWebhookRetentionHours('2160')).toBe(2160);
+  });
+
+  it('rejects zero and negative integers', () => {
+    expect(() => parseWebhookRetentionHours('0')).toThrow(/positive integer/);
+    expect(() => parseWebhookRetentionHours('-1')).toThrow(/positive integer/);
+    expect(() => parseWebhookRetentionHours('-4')).toThrow(/positive integer/);
+  });
+
+  it('rejects non-numeric, decimal, and non-finite values', () => {
+    expect(() => parseWebhookRetentionHours('banana')).toThrow(/positive integer/);
+    expect(() => parseWebhookRetentionHours('1.5')).toThrow(/positive integer/);
+    expect(() => parseWebhookRetentionHours('NaN')).toThrow(/positive integer/);
+    expect(() => parseWebhookRetentionHours('Infinity')).toThrow(/positive integer/);
+    expect(() => parseWebhookRetentionHours('-Infinity')).toThrow(/positive integer/);
+  });
+
+  it('rejects values above the maximum upper bound (2160 hours / 90 days)', () => {
+    expect(() => parseWebhookRetentionHours('2161')).toThrow(/between 1 and 2160/);
+    expect(() => parseWebhookRetentionHours('5000')).toThrow(/between 1 and 2160/);
+    expect(() => parseWebhookRetentionHours('999999')).toThrow(/between 1 and 2160/);
   });
 });

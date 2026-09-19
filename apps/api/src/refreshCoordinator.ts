@@ -3,21 +3,32 @@ import type { StructuredLogger } from '@sonoran-hub/config';
 export interface GitHubRefreshCoordinatorOptions {
   readonly refreshHandler: (owner: string, repo: string) => Promise<void>;
   readonly debounceMs?: number;
+  readonly maxDebounceMs?: number;
+  readonly shutdownGraceMs?: number;
   readonly concurrency?: number;
   readonly logger?: StructuredLogger;
+  readonly now?: () => number;
 }
 
-export const DEFAULT_WEBHOOK_DEBOUNCE_MS = 1_000;
+export const DEFAULT_WEBHOOK_DEBOUNCE_MS = 500;
+export const DEFAULT_WEBHOOK_MAX_DEBOUNCE_MS = 1_500;
+export const DEFAULT_SHUTDOWN_GRACE_MS = 3_000;
 export const DEFAULT_MAX_CONCURRENT_REFRESHES = 3;
 
 export class GitHubRefreshCoordinator {
   private readonly refreshHandler: (owner: string, repo: string) => Promise<void>;
   private readonly debounceMs: number;
+  private readonly maxDebounceMs: number;
+  private readonly shutdownGraceMs: number;
   private readonly concurrency: number;
   private readonly logger?: StructuredLogger;
+  private readonly now: () => number;
 
   // Active debounce timers: key -> NodeJS.Timeout
   private readonly debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  // First queued timestamp for the current debounce window: key -> timestamp (ms)
+  private readonly queuedAt = new Map<string, number>();
 
   // Currently executing refreshes: key -> Promise<void>
   private readonly inFlight = new Map<string, Promise<void>>();
@@ -33,8 +44,11 @@ export class GitHubRefreshCoordinator {
   constructor(options: GitHubRefreshCoordinatorOptions) {
     this.refreshHandler = options.refreshHandler;
     this.debounceMs = options.debounceMs ?? DEFAULT_WEBHOOK_DEBOUNCE_MS;
+    this.maxDebounceMs = options.maxDebounceMs ?? DEFAULT_WEBHOOK_MAX_DEBOUNCE_MS;
+    this.shutdownGraceMs = options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS;
     this.concurrency = options.concurrency ?? DEFAULT_MAX_CONCURRENT_REFRESHES;
     this.logger = options.logger;
+    this.now = options.now ?? (() => Date.now());
   }
 
   scheduleRefresh(owner: string, repo: string): void {
@@ -53,26 +67,39 @@ export class GitHubRefreshCoordinator {
       return;
     }
 
-    // If already waiting in debounce timer, coalesce (maintain/reset debounce)
+    const currentTime = this.now();
+    let firstQueuedAt = this.queuedAt.get(key);
+    if (firstQueuedAt === undefined) {
+      firstQueuedAt = currentTime;
+      this.queuedAt.set(key, firstQueuedAt);
+    }
+
+    const maxDeadline = firstQueuedAt + this.maxDebounceMs;
+    const quietDeadline = currentTime + this.debounceMs;
+    const fireAt = Math.min(quietDeadline, maxDeadline);
+    const delayMs = Math.max(0, fireAt - currentTime);
+
+    // If already waiting in debounce timer, coalesce (maintain/reset debounce up to max deadline)
     const existingTimer = this.debounceTimers.get(key);
     if (existingTimer !== undefined) {
       clearTimeout(existingTimer);
       this.logger?.debug('github.webhook.refresh_coalesced', {
-        metadata: { repository: `${owner}/${repo}`, reason: 'debouncing' },
+        metadata: { repository: `${owner}/${repo}`, reason: 'debouncing', delayMs },
       });
     }
 
     const timer = setTimeout(() => {
       this.debounceTimers.delete(key);
+      this.queuedAt.delete(key);
       if (this.stopped) {
         return;
       }
       this.dispatch(owner, repo, key);
-    }, this.debounceMs);
+    }, delayMs);
 
     this.debounceTimers.set(key, timer);
     this.logger?.debug('github.webhook.refresh_queued', {
-      metadata: { repository: `${owner}/${repo}`, debounceMs: this.debounceMs },
+      metadata: { repository: `${owner}/${repo}`, delayMs, debounceMs: this.debounceMs },
     });
   }
 
@@ -99,9 +126,9 @@ export class GitHubRefreshCoordinator {
         this.logger?.info('github.webhook.refresh_started', {
           metadata: { repository: repoFullName },
         });
-        const startTime = Date.now();
+        const startTime = this.now();
         await this.refreshHandler(owner, repo);
-        const durationMs = Date.now() - startTime;
+        const durationMs = this.now() - startTime;
         this.logger?.info('github.webhook.refresh_completed', {
           metadata: { repository: repoFullName, durationMs },
         });
@@ -172,11 +199,38 @@ export class GitHubRefreshCoordinator {
       clearTimeout(timer);
     }
     this.debounceTimers.clear();
+    this.queuedAt.clear();
     this.dirty.clear();
     this.waitQueue.length = 0;
 
-    if (this.inFlight.size > 0) {
-      await Promise.allSettled(Array.from(this.inFlight.values()));
+    if (this.inFlight.size === 0) {
+      return;
+    }
+
+    const inFlightPromises = Array.from(this.inFlight.values());
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), this.shutdownGraceMs);
+    });
+
+    try {
+      const result = await Promise.race([
+        Promise.allSettled(inFlightPromises).then(() => 'completed' as const),
+        timeoutPromise,
+      ]);
+
+      if (result === 'timeout') {
+        this.logger?.warn('github.webhook.shutdown_grace_expired', {
+          metadata: {
+            inFlightCount: inFlightPromises.length,
+            shutdownGraceMs: this.shutdownGraceMs,
+          },
+        });
+      }
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
     }
   }
 }

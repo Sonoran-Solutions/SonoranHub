@@ -444,7 +444,13 @@ Browser UI (polls GET /projects every ~15s)
    Periodic background polling (`GITHUB_REFRESH_INTERVAL_MS`, default 60s) remains active regardless of webhook activity, ensuring eventual consistency if webhooks are delayed, dropped, or unconfigured.
 
 6. **Retention and Storage Hygiene:**
-   Webhook delivery records are stored in `github_webhook_deliveries` (`delivery_id`, `event_name`, `repository_owner`, `repository_name`, `outcome`, `received_at`, `processed_at`). A scheduled retention manager (`createWebhookRetentionManager`) automatically prunes audit records older than `GITHUB_WEBHOOK_DELIVERY_RETENTION_HOURS` (default 72 hours).
+   Webhook delivery records are stored in `github_webhook_deliveries` (`delivery_id`, `event_name`, `repository_owner`, `repository_name`, `outcome`, `received_at`, `processed_at`). A scheduled retention manager (`createWebhookRetentionManager`) automatically prunes audit records older than `GITHUB_WEBHOOK_DELIVERY_RETENTION_HOURS` (default 168 hours / 7 days, strictly bounded between 1 and 2160 hours).
+
+7. **Rate-Limited Reconciliations & Stale Semantics:**
+   When an invalidated repository refresh is rate-limited (`rateLimit.remaining === 0` and reset time in the future), Hub marks the affected repository and enclosing project freshness as `stale` without calling GitHub collection APIs or triggering retry storms. All previously normalized repository data is preserved until the rate limit resets.
+
+8. **Bounded Graceful Shutdown:**
+   `GitHubRefreshCoordinator.stop()` clears all pending debounce timers and wait queues, then awaits active in-flight refreshes bounded by `shutdownGraceMs` (default 3s). Any hanging refresh promise times out cleanly so Fastify server shutdown and process exit are always bounded without unhandled rejection noise.
 
 Task execution, Git worktrees, and code/issue/PR mutations (Phase 3) remain deferred.
 

@@ -267,7 +267,8 @@ without turning webhook payloads into a second source of truth.
 - [x] Atomic delivery deduplication (`ON CONFLICT (delivery_id) DO NOTHING RETURNING delivery_id`) preventing replayed deliveries from enqueueing redundant reconciliation.
 - [x] Keyed refresh coordination (`GitHubRefreshCoordinator`) with configurable debounce (500–1500ms), burst coalescing, and dirty follow-up scheduling during in-flight refreshes.
 - [x] Targeted repository reconciliation (`ProjectService.refreshRepository`) serialized per-project via FIFO locks (`withProjectLock`), preserving unaffected repository snapshots and rate limit backoffs.
-- [x] Automated retention management (`createWebhookRetentionManager`) pruning delivery records older than `GITHUB_WEBHOOK_DELIVERY_RETENTION_HOURS` (default 72h).
+- [x] Automated retention management (`createWebhookRetentionManager`) pruning delivery records older than `GITHUB_WEBHOOK_DELIVERY_RETENTION_HOURS` (default 168h / 7 days, strictly bounded 1–2160h).
+- [x] Phase 2B hardening pass: bounded Fastify/coordinator shutdown (`shutdownGraceMs: 3000`), zero-starvation max debounce ceiling (`maxDebounceMs: 1500`), rate-limited webhook reconciliation stale preservation without retry storms, and accurate delivery outcome classification (`outcome: 'accepted'` vs `outcome: 'ignored'`).
 - [x] Update attention issue counting to evaluate all fetched items on the page, keep item list bounded, and signal `attentionIssueHasMore` / `attentionIssuesHasMore` in UI (`3+`).
 - [x] End-to-end smoke verification script `pnpm smoke:github-webhook` testing missing/bad signatures, pings, unhandled events, push events, deduplication, and targeted reconciliation.
 

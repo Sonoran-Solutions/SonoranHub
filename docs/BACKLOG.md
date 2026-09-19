@@ -258,7 +258,7 @@ Display branch/PR/issue/CI attention summary in responsive Projects list (`/proj
 
 ## F4 — GitHub webhook ingestion [P1] — Implemented (Phase 2B)
 
-Ingest signed GitHub webhooks (`POST /github/webhooks`) with timing-safe raw-body HMAC-SHA256 signature verification against `GITHUB_WEBHOOK_SECRET`. Enforce 1 MiB body limit, deduplicate delivery IDs in PostgreSQL (`github_webhook_deliveries`) or memory, coalesce burst events via debounced refresh queues (500–1500ms), and trigger targeted repository reconciliation using authoritative GitHub read APIs. Scheduled retention manager prunes delivery records after 72 hours.
+Ingest signed GitHub webhooks (`POST /github/webhooks`) with timing-safe raw-body HMAC-SHA256 signature verification against `GITHUB_WEBHOOK_SECRET`. Enforce 1 MiB body limit, deduplicate delivery IDs in PostgreSQL (`github_webhook_deliveries`) or memory, coalesce burst events via debounced refresh queues (500–1500ms), and trigger targeted repository reconciliation using authoritative GitHub read APIs. Scheduled retention manager prunes delivery records after 168 hours (7 days).
 
 ---
 

@@ -144,7 +144,7 @@ verifies raw-body HMAC-SHA256 signatures (`X-Hub-Signature-256`) against `GITHUB
 in constant time before inspecting payloads, rejects payloads exceeding 1 MiB with HTTP 413,
 deduplicates delivery IDs in PostgreSQL (`github_webhook_deliveries`) or memory, coalesces rapid events
 via debounced refresh queues (500–1500ms), and prunes delivery records after a configurable retention window
-(`GITHUB_WEBHOOK_DELIVERY_RETENTION_HOURS`, default 72h). Test webhook ingestion and targeted reconciliation
+(`GITHUB_WEBHOOK_DELIVERY_RETENTION_HOURS`, default 168h / 7 days, bounded 1–2160h). Test webhook ingestion and targeted reconciliation
 end-to-end with `pnpm smoke:github-webhook`.
 
 The provider refresh default is every 60 seconds and can be changed with

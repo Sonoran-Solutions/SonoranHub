@@ -46,7 +46,7 @@ const webhookDeliveryStore = new InMemoryGitHubWebhookDeliveryStore();
 let reconciledOwnerRepo = null;
 const webhookCoordinator = new GitHubRefreshCoordinator({
   debounceMs: 150,
-  maxDelayMs: 300,
+  maxDebounceMs: 300,
   refreshHandler: async (owner, repo) => {
     reconciledOwnerRepo = `${owner}/${repo}`;
     await projects.service.refreshRepository(owner, repo);

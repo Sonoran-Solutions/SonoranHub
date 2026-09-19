@@ -128,7 +128,33 @@ export interface WebhookRetentionManager {
 }
 
 export const DEFAULT_WEBHOOK_RETENTION_HOURS = 168; // 7 days
+export const MIN_WEBHOOK_RETENTION_HOURS = 1;
+export const MAX_WEBHOOK_RETENTION_HOURS = 2_160; // 90 days
 export const DEFAULT_RETENTION_INTERVAL_MS = 3_600_000; // 1 hour
+
+export function parseWebhookRetentionHours(value: string | undefined): number {
+  if (value === undefined || value.trim() === '') {
+    return DEFAULT_WEBHOOK_RETENTION_HOURS;
+  }
+  const trimmed = value.trim();
+  if (!/^-?\d+$/.test(trimmed)) {
+    throw new Error(
+      `GITHUB_WEBHOOK_DELIVERY_RETENTION_HOURS must be a positive integer between ${MIN_WEBHOOK_RETENTION_HOURS} and ${MAX_WEBHOOK_RETENTION_HOURS}`,
+    );
+  }
+  const parsed = Number(trimmed);
+  if (
+    !Number.isFinite(parsed) ||
+    !Number.isInteger(parsed) ||
+    parsed < MIN_WEBHOOK_RETENTION_HOURS ||
+    parsed > MAX_WEBHOOK_RETENTION_HOURS
+  ) {
+    throw new Error(
+      `GITHUB_WEBHOOK_DELIVERY_RETENTION_HOURS must be a positive integer between ${MIN_WEBHOOK_RETENTION_HOURS} and ${MAX_WEBHOOK_RETENTION_HOURS}`,
+    );
+  }
+  return parsed;
+}
 
 export function createWebhookRetentionManager(
   options: WebhookRetentionManagerOptions,

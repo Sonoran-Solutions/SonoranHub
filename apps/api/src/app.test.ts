@@ -12,6 +12,7 @@ import {
 import type { CapacityCollectionResult } from '@sonoran-hub/contracts';
 
 import { buildApp } from './app.js';
+import { GitHubRefreshCoordinator } from './refreshCoordinator.js';
 
 describe('API health endpoint', () => {
   let app: ReturnType<typeof buildApp>;
@@ -247,5 +248,42 @@ describe('Capacity API', () => {
     expect(failingCurrent.statusCode).toBe(503);
     expect(failingHistory.statusCode).toBe(503);
     expect(failingCurrent.body).not.toContain('password');
+  });
+});
+
+describe('API shutdown lifecycle', () => {
+  it('bounds shutdown time when an in-flight webhook refresh hangs', async () => {
+    let refreshStarted = false;
+    let hangPromiseResolve: (() => void) | undefined;
+    const coordinator = new GitHubRefreshCoordinator({
+      debounceMs: 5,
+      shutdownGraceMs: 50,
+      refreshHandler: async () => {
+        refreshStarted = true;
+        await new Promise<void>((resolve) => {
+          hangPromiseResolve = resolve;
+        });
+      },
+    });
+
+    const app = buildApp(testConfig, { refreshCoordinator: coordinator });
+    coordinator.scheduleRefresh('Sonoran-Solutions', 'SonoranHub');
+
+    // Wait until the refresh has started
+    const startMs = Date.now();
+    while (!refreshStarted && Date.now() - startMs < 1000) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(refreshStarted).toBe(true);
+
+    const closeStart = Date.now();
+    await app.close();
+    const closeDuration = Date.now() - closeStart;
+
+    // Shutdown should finish around shutdownGraceMs (50ms), well below 500ms
+    expect(closeDuration).toBeLessThan(500);
+
+    // Clean up hung promise
+    hangPromiseResolve?.();
   });
 });

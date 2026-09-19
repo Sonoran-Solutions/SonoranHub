@@ -188,6 +188,53 @@ export class ProjectService {
         this.logger?.warn('projects.targeted_refresh.rate_limited', {
           metadata: { repository: `${owner}/${repo}`, resetAt: rateLimit.resetAt },
         });
+
+        // Webhook invalidation signal arrived but cannot be reconciled due to rate limit:
+        // Mark affected repository stale while preserving all existing normalized values.
+        for (const project of matchingProjects) {
+          if (this.stopped) break;
+
+          await this.withProjectLock(project.id, async () => {
+            const previousSnapshot = await this.store.getLatestGitHubSnapshot(project.id);
+            if (!previousSnapshot) {
+              return;
+            }
+
+            const updatedRepositories = previousSnapshot.data.repositories.map((r) => {
+              const rKey = `${r.owner.toLowerCase()}/${r.name.toLowerCase()}`;
+              if (rKey === targetKey) {
+                return { ...r, freshness: 'stale' as const };
+              }
+              return r;
+            });
+
+            const overallFreshness = this.computeFreshness(updatedRepositories);
+            const attention = this.computeAttention(updatedRepositories);
+            const now = new Date().toISOString();
+
+            const snapshotRecord: PersistedGitHubSnapshot = {
+              id: randomUUID(),
+              projectId: project.id,
+              collectedAt: now,
+              freshness: overallFreshness,
+              data: {
+                repositories: updatedRepositories,
+                attention,
+              },
+              createdAt: now,
+            };
+
+            await this.store.saveGitHubSnapshot(snapshotRecord);
+
+            this.logger?.info('projects.targeted_refresh.rate_limited_stale_persisted', {
+              metadata: {
+                projectId: project.id,
+                repository: `${owner}/${repo}`,
+                freshness: overallFreshness,
+              },
+            });
+          });
+        }
         return;
       }
     }
