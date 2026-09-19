@@ -5,7 +5,6 @@ import type {
   GitHubSourceHealth,
 } from '@sonoran-hub/contracts';
 
-
 import { GitHubIntegrationError } from './errors.js';
 import type { GitHubProjectSource, GitHubRateLimit, NormalizedRepositoryResult } from './types.js';
 

@@ -95,7 +95,6 @@ describe.skipIf(!hasDatabase)('PostgresProjectStore', () => {
             attentionIssueCount: 0,
             freshness: 'fresh' as const,
           },
-
         ],
         attention: {
           failingCi: 0,
