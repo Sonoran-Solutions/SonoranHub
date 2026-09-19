@@ -13,6 +13,188 @@
           "primary": true
         }
       ]
+    },
+    {
+      "id": "thought-router",
+      "name": "ThoughtRouter",
+      "description": "AI thought routing and ideation engine",
+      "attentionLabels": ["bug", "blocked", "priority"],
+      "repositories": [
+        {
+          "owner": "Sonoran-Solutions",
+          "name": "ThoughtRouter",
+          "primary": true
+        }
+      ]
+    },
+    {
+      "id": "orchestrator",
+      "name": "Sonoran Solutions Orchestrator",
+      "description": "Task execution and model orchestration",
+      "attentionLabels": ["bug", "blocked", "priority"],
+      "repositories": [
+        {
+          "owner": "Sonoran-Solutions",
+          "name": "Sonoran-Solutions-Orchestrator",
+          "primary": true
+        }
+      ]
+    },
+    {
+      "id": "landing-page",
+      "name": "Sonoran Solutions Landing Page",
+      "description": "Official landing page for Sonoran Solutions",
+      "attentionLabels": ["bug", "blocked", "priority"],
+      "repositories": [
+        {
+          "owner": "Sonoran-Solutions",
+          "name": "SonoranSolutionsLandingPage",
+          "primary": true
+        }
+      ]
+    },
+    {
+      "id": "project-holocron",
+      "name": "Project Holocron",
+      "description": "Knowledge base and persistent context store",
+      "attentionLabels": ["bug", "blocked", "priority"],
+      "repositories": [
+        {
+          "owner": "Sonoran-Solutions",
+          "name": "Project-Holocron",
+          "primary": true
+        }
+      ]
+    },
+    {
+      "id": "champions-helper",
+      "name": "Champions Helper",
+      "description": "Champions Helper companion application",
+      "attentionLabels": ["bug", "blocked", "priority"],
+      "repositories": [
+        {
+          "owner": "Sonoran-Solutions",
+          "name": "Champions-Helper",
+          "primary": true
+        }
+      ]
+    },
+    {
+      "id": "super-x-helper",
+      "name": "Super X Helper",
+      "description": "Super X Helper companion application",
+      "attentionLabels": ["bug", "blocked", "priority"],
+      "repositories": [
+        {
+          "owner": "Sonoran-Solutions",
+          "name": "Super-X-Helper",
+          "primary": true
+        }
+      ]
+    },
+    {
+      "id": "fantasy-savior",
+      "name": "Fantasy Savior",
+      "description": "Fantasy Savior game/application",
+      "attentionLabels": ["bug", "blocked", "priority"],
+      "repositories": [
+        {
+          "owner": "Sonoran-Solutions",
+          "name": "FantasySavior",
+          "primary": true
+        }
+      ]
+    },
+    {
+      "id": "dualdex",
+      "name": "Dualdex",
+      "description": "Dualdex application",
+      "attentionLabels": ["bug", "blocked", "priority"],
+      "repositories": [
+        {
+          "owner": "Sonoran-Solutions",
+          "name": "dualdex",
+          "primary": true
+        }
+      ]
+    },
+    {
+      "id": "dungeon-dispatcher",
+      "name": "Dungeon Dispatcher",
+      "description": "Dungeon Dispatcher application",
+      "attentionLabels": ["bug", "blocked", "priority"],
+      "repositories": [
+        {
+          "owner": "Sonoran-Solutions",
+          "name": "DungeonDispatcher",
+          "primary": true
+        }
+      ]
+    },
+    {
+      "id": "portfolio-site",
+      "name": "Portfolio Site",
+      "description": "Personal developer portfolio website",
+      "attentionLabels": ["bug", "blocked", "priority"],
+      "repositories": [
+        {
+          "owner": "Sonoran-Solutions",
+          "name": "dylanquintanarportfoliosite",
+          "primary": true
+        }
+      ]
+    },
+    {
+      "id": "compare-saving-strategies",
+      "name": "Compare Saving Strategies",
+      "description": "Financial savings comparison tool",
+      "attentionLabels": ["bug", "blocked", "priority"],
+      "repositories": [
+        {
+          "owner": "Sonoran-Solutions",
+          "name": "comparesavingstrategies",
+          "primary": true
+        }
+      ]
+    },
+    {
+      "id": "a2zbooks",
+      "name": "A2Z Books",
+      "description": "A2Z Books application",
+      "attentionLabels": ["bug", "blocked", "priority"],
+      "repositories": [
+        {
+          "owner": "Sonoran-Solutions",
+          "name": "a2zbooks",
+          "primary": true
+        }
+      ]
+    },
+    {
+      "id": "sdssstsst",
+      "name": "SDSSSTSST",
+      "description": "SDSSSTSST repository",
+      "attentionLabels": ["bug", "blocked", "priority"],
+      "repositories": [
+        {
+          "owner": "Sonoran-Solutions",
+          "name": "sdssstsst",
+          "primary": true
+        }
+      ]
+    },
+    {
+      "id": "silly-code",
+      "name": "Silly Code",
+      "description": "Experimental and scratchpad codebase",
+      "attentionLabels": ["bug", "blocked", "priority"],
+      "repositories": [
+        {
+          "owner": "Sonoran-Solutions",
+          "name": "SillyCode",
+          "primary": true
+        }
+      ]
     }
   ]
 }

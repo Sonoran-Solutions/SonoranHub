@@ -37,21 +37,31 @@ export function loadProjectConfig(options: LoadProjectConfigOptions = {}): Proje
   const explicitPath = env.SONORAN_PROJECTS_PATH?.trim();
 
   if (explicitPath) {
-    const fullPath = resolve(cwd, explicitPath);
-    if (!existsSync(fullPath)) {
+    const candidates = [
+      resolve(cwd, explicitPath),
+      resolve(cwd, '../../', explicitPath),
+      resolve(cwd, '../', explicitPath),
+    ];
+    const found = candidates.find((p) => existsSync(p));
+    if (!found) {
       throw new ProjectConfigurationError(
-        `Explicit project configuration file not found at ${fullPath}`,
+        `Explicit project configuration file not found at ${resolve(cwd, explicitPath)}`,
       );
     }
-    return parseConfigFile(fullPath);
+    return parseConfigFile(found);
   }
 
-  const defaultPath = resolve(cwd, DEFAULT_PROJECTS_CONFIG_RELATIVE_PATH);
-  if (!existsSync(defaultPath)) {
+  const defaultCandidates = [
+    resolve(cwd, DEFAULT_PROJECTS_CONFIG_RELATIVE_PATH),
+    resolve(cwd, '../../', DEFAULT_PROJECTS_CONFIG_RELATIVE_PATH),
+    resolve(cwd, '../', DEFAULT_PROJECTS_CONFIG_RELATIVE_PATH),
+  ];
+  const foundDefault = defaultCandidates.find((p) => existsSync(p));
+  if (!foundDefault) {
     return { version: 1, projects: [] };
   }
 
-  return parseConfigFile(defaultPath);
+  return parseConfigFile(foundDefault);
 }
 
 function parseConfigFile(filePath: string): ProjectsConfigFile {

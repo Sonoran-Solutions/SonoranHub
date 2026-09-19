@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 import { buildApp } from './app.js';
 import { createCapacityRuntime } from './capacity.js';
 import { parseAllowedOrigins } from './cors.js';
@@ -6,6 +9,21 @@ import { PostgresMachineActionStore } from './actions.js';
 import { createProjectsRuntime } from './projects.js';
 import { createStructuredLogger, loadConfig } from '@sonoran-hub/config';
 import pg from 'pg';
+
+// Automatically load .env from current directory or workspace root
+for (const envCandidate of ['.env', '../../.env', '../.env']) {
+  const resolved = path.resolve(process.cwd(), envCandidate);
+  if (fs.existsSync(resolved)) {
+    try {
+      if (typeof process.loadEnvFile === 'function') {
+        process.loadEnvFile(resolved);
+      }
+    } catch {
+      // ignore
+    }
+    break;
+  }
+}
 
 const { Pool } = pg;
 

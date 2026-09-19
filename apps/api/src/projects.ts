@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
+import path from 'node:path';
 import type { Pool } from 'pg';
 
 import type { AppConfig, StructuredLogger } from '@sonoran-hub/config';
@@ -355,25 +356,38 @@ export interface ProjectsRuntimeEnvironment {
   readonly DATABASE_URL?: string;
 }
 
+function findExistingKeyFile(pathOrName: string): string | undefined {
+  const candidates = [
+    pathOrName,
+    path.resolve(process.cwd(), pathOrName),
+    path.resolve(process.cwd(), '../../', pathOrName),
+    path.resolve(process.cwd(), '../', pathOrName),
+  ];
+  return candidates.find((p) => fs.existsSync(p));
+}
+
 function resolvePrivateKey(environment: ProjectsRuntimeEnvironment): string | undefined {
   const inlineOrPath = environment.GITHUB_PRIVATE_KEY?.trim();
   if (inlineOrPath) {
-    if (fs.existsSync(inlineOrPath)) {
+    const file = findExistingKeyFile(inlineOrPath);
+    if (file) {
       try {
-        return fs.readFileSync(inlineOrPath, 'utf-8');
+        return fs.readFileSync(file, 'utf-8');
       } catch {
-        // Fall back to treating as inline string
         return inlineOrPath;
       }
     }
     return inlineOrPath;
   }
   const explicitPath = environment.GITHUB_PRIVATE_KEY_PATH?.trim();
-  if (explicitPath && fs.existsSync(explicitPath)) {
-    try {
-      return fs.readFileSync(explicitPath, 'utf-8');
-    } catch {
-      return undefined;
+  if (explicitPath) {
+    const file = findExistingKeyFile(explicitPath);
+    if (file) {
+      try {
+        return fs.readFileSync(file, 'utf-8');
+      } catch {
+        return undefined;
+      }
     }
   }
   return undefined;
