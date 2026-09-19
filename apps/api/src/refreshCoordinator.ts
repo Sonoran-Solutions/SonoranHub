@@ -15,6 +15,11 @@ export const DEFAULT_WEBHOOK_MAX_DEBOUNCE_MS = 1_500;
 export const DEFAULT_SHUTDOWN_GRACE_MS = 3_000;
 export const DEFAULT_MAX_CONCURRENT_REFRESHES = 3;
 
+interface ActiveExecution {
+  readonly id: number;
+  readonly promise: Promise<void>;
+}
+
 export class GitHubRefreshCoordinator {
   private readonly refreshHandler: (owner: string, repo: string) => Promise<void>;
   private readonly debounceMs: number;
@@ -30,14 +35,20 @@ export class GitHubRefreshCoordinator {
   // First queued timestamp for the current debounce window: key -> timestamp (ms)
   private readonly queuedAt = new Map<string, number>();
 
-  // Currently executing refreshes: key -> Promise<void>
-  private readonly inFlight = new Map<string, Promise<void>>();
+  // Currently executing refreshes: key -> ActiveExecution
+  private readonly inFlight = new Map<string, ActiveExecution>();
+
+  // Monotonically increasing execution token generator
+  private nextExecutionId = 0;
 
   // Repositories flagged as needing follow-up because an event arrived while in-flight
   private readonly dirty = new Set<string>();
 
   // Queue of repo keys waiting for a concurrency slot
   private readonly waitQueue: Array<{ owner: string; repo: string; key: string }> = [];
+
+  // Fast lookup set of keys currently waiting in waitQueue
+  private readonly queuedKeys = new Set<string>();
 
   private stopped = false;
 
@@ -58,11 +69,19 @@ export class GitHubRefreshCoordinator {
 
     const key = `${owner.toLowerCase()}/${repo.toLowerCase()}`;
 
-    // If already in-flight, mark dirty for follow-up
+    // 1. If already in-flight, mark dirty for follow-up
     if (this.inFlight.has(key)) {
       this.dirty.add(key);
       this.logger?.debug('github.webhook.refresh_coalesced', {
         metadata: { repository: `${owner}/${repo}`, reason: 'in_flight' },
+      });
+      return;
+    }
+
+    // 2. If waiting in the concurrency queue, coalesce into the existing queued request
+    if (this.queuedKeys.has(key)) {
+      this.logger?.debug('github.webhook.refresh_coalesced', {
+        metadata: { repository: `${owner}/${repo}`, reason: 'queued' },
       });
       return;
     }
@@ -79,7 +98,7 @@ export class GitHubRefreshCoordinator {
     const fireAt = Math.min(quietDeadline, maxDeadline);
     const delayMs = Math.max(0, fireAt - currentTime);
 
-    // If already waiting in debounce timer, coalesce (maintain/reset debounce up to max deadline)
+    // 3. If already waiting in debounce timer, coalesce (maintain/reset debounce up to max deadline)
     const existingTimer = this.debounceTimers.get(key);
     if (existingTimer !== undefined) {
       clearTimeout(existingTimer);
@@ -104,15 +123,30 @@ export class GitHubRefreshCoordinator {
   }
 
   private dispatch(owner: string, repo: string, key: string): void {
-    if (this.inFlight.size >= this.concurrency) {
-      // Concurrency limit reached, queue it if not already queued
-      if (!this.waitQueue.some((item) => item.key === key)) {
-        this.waitQueue.push({ owner, repo, key });
-      }
+    if (this.stopped) {
       return;
     }
 
-    void this.executeRefresh(owner, repo, key);
+    // Defense-in-depth: do not dispatch if already running
+    if (this.inFlight.has(key)) {
+      return;
+    }
+
+    // Defense-in-depth: do not re-queue if already in queue
+    if (this.queuedKeys.has(key)) {
+      return;
+    }
+
+    // If concurrency slots are available and no items are waiting ahead in FIFO order:
+    if (this.inFlight.size < this.concurrency && this.waitQueue.length === 0) {
+      void this.executeRefresh(owner, repo, key);
+      return;
+    }
+
+    // Otherwise, enqueue behind any waiting items
+    this.waitQueue.push({ owner, repo, key });
+    this.queuedKeys.add(key);
+    this.processQueue();
   }
 
   private async executeRefresh(owner: string, repo: string, key: string): Promise<void> {
@@ -120,7 +154,37 @@ export class GitHubRefreshCoordinator {
       return;
     }
 
+    // Defense-in-depth: never start a second execution for an already active key
+    if (this.inFlight.has(key)) {
+      return;
+    }
+
+    // Defense-in-depth: strictly respect configured global concurrency
+    if (this.inFlight.size >= this.concurrency) {
+      if (!this.queuedKeys.has(key)) {
+        this.waitQueue.unshift({ owner, repo, key });
+        this.queuedKeys.add(key);
+      }
+      return;
+    }
+
+    // Clean up any residual debounce/queue state for this key
+    const existingTimer = this.debounceTimers.get(key);
+    if (existingTimer !== undefined) {
+      clearTimeout(existingTimer);
+      this.debounceTimers.delete(key);
+    }
+    this.queuedAt.delete(key);
+    this.queuedKeys.delete(key);
+
+    const executionId = ++this.nextExecutionId;
+    let resolveRun!: () => void;
+    const runGate = new Promise<void>((resolve) => {
+      resolveRun = resolve;
+    });
+
     const promise = (async () => {
+      await runGate;
       const repoFullName = `${owner}/${repo}`;
       try {
         this.logger?.info('github.webhook.refresh_started', {
@@ -140,7 +204,11 @@ export class GitHubRefreshCoordinator {
           },
         });
       } finally {
-        this.inFlight.delete(key);
+        // Ownership-safe completion: clear entry only if it still belongs to this execution
+        const current = this.inFlight.get(key);
+        if (current && current.id === executionId) {
+          this.inFlight.delete(key);
+        }
 
         // If dirty, schedule at most one follow-up refresh
         if (!this.stopped && this.dirty.has(key)) {
@@ -152,7 +220,9 @@ export class GitHubRefreshCoordinator {
       }
     })();
 
-    this.inFlight.set(key, promise);
+    // Synchronously register execution ownership before external handler invocation
+    this.inFlight.set(key, { id: executionId, promise });
+    resolveRun();
   }
 
   private processQueue(): void {
@@ -162,7 +232,11 @@ export class GitHubRefreshCoordinator {
 
     while (this.inFlight.size < this.concurrency && this.waitQueue.length > 0) {
       const next = this.waitQueue.shift();
-      if (next && !this.inFlight.has(next.key)) {
+      if (!next) {
+        break;
+      }
+      this.queuedKeys.delete(next.key);
+      if (!this.inFlight.has(next.key)) {
         void this.executeRefresh(next.owner, next.repo, next.key);
       }
     }
@@ -171,6 +245,11 @@ export class GitHubRefreshCoordinator {
   isDebouncing(owner: string, repo: string): boolean {
     const key = `${owner.toLowerCase()}/${repo.toLowerCase()}`;
     return this.debounceTimers.has(key);
+  }
+
+  isQueued(owner: string, repo: string): boolean {
+    const key = `${owner.toLowerCase()}/${repo.toLowerCase()}`;
+    return this.queuedKeys.has(key);
   }
 
   isInFlight(owner: string, repo: string): boolean {
@@ -186,7 +265,7 @@ export class GitHubRefreshCoordinator {
   async waitForIdle(): Promise<void> {
     while (this.debounceTimers.size > 0 || this.inFlight.size > 0 || this.waitQueue.length > 0) {
       if (this.inFlight.size > 0) {
-        await Promise.allSettled(Array.from(this.inFlight.values()));
+        await Promise.allSettled(Array.from(this.inFlight.values()).map((e) => e.promise));
       } else {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
@@ -202,12 +281,13 @@ export class GitHubRefreshCoordinator {
     this.queuedAt.clear();
     this.dirty.clear();
     this.waitQueue.length = 0;
+    this.queuedKeys.clear();
 
     if (this.inFlight.size === 0) {
       return;
     }
 
-    const inFlightPromises = Array.from(this.inFlight.values());
+    const inFlightPromises = Array.from(this.inFlight.values()).map((e) => e.promise);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<'timeout'>((resolve) => {
       timer = setTimeout(() => resolve('timeout'), this.shutdownGraceMs);

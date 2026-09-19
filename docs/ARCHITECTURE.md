@@ -452,6 +452,9 @@ Browser UI (polls GET /projects every ~15s)
 8. **Bounded Graceful Shutdown:**
    `GitHubRefreshCoordinator.stop()` clears all pending debounce timers and wait queues, then awaits active in-flight refreshes bounded by `shutdownGraceMs` (default 3s). Any hanging refresh promise times out cleanly so Fastify server shutdown and process exit are always bounded without unhandled rejection noise.
 
+9. **Explicit Queue Ownership & Concurrency Guarantees:**
+   The coordinator enforces an explicit ownership model across states (debouncing, queued, running, idle) using execution tokens. Repeated events for queued repositories coalesce into their existing queued request without creating duplicate debounce timers or altering FIFO queue order. At most one active refresh handler executes per normalized repository key, and total active handlers never exceed configured global concurrency. `maxDebounceMs` (1500ms) bounds how long repeated events can postpone becoming eligible for execution; it does not violate the concurrency limit when all execution slots are occupied.
+
 Task execution, Git worktrees, and code/issue/PR mutations (Phase 3) remain deferred.
 
 ## 10. AI capacity architecture
