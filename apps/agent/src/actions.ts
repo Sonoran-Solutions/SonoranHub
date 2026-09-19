@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 
 import {
+  AGENT_PROTOCOL_VERSION,
   agentActionResultSchema,
   type AgentActionRequest,
   type AgentActionResult,
@@ -97,17 +98,18 @@ export class AgentActionExecutor {
     if (!this.capabilities.includes(capability)) {
       return { accepted: false, result: this.denied(request, 'capability_not_granted') };
     }
-    if (this.active) return { accepted: false, result: this.denied(request, 'busy') };
-
     const target = this.resolveTarget(request.action);
     if (!target) return { accepted: false, result: this.denied(request, 'target_not_allowed') };
+    if (this.active) return { accepted: false, result: this.denied(request, 'busy') };
 
     this.active = true;
     return {
       accepted: true,
-      result: this.runAction(request, target).finally(() => {
-        this.active = false;
-      }),
+      result: this.runAction(request, target)
+        .catch(() => this.failed(request, 'process_start_failed', 'Action process failed'))
+        .finally(() => {
+          this.active = false;
+        }),
     };
   }
 
@@ -128,7 +130,8 @@ export class AgentActionExecutor {
     request: AgentActionRequest,
     target: { readonly path: string } | { readonly unit: string },
   ): Promise<AgentActionResult> {
-    const remainingMs = Math.max(1, Date.parse(request.deadlineAt) - this.now());
+    const remainingMs = this.remainingTimeoutMs(request);
+    if (remainingMs <= 0) return this.timedOut(request);
     const timeoutMs = Math.min(ACTION_TIMEOUTS_MS[request.action.kind], remainingMs);
     if (request.action.kind === 'repo.status' && 'path' in target) {
       return this.handleRepositoryStatus(request, target.path, timeoutMs);
@@ -177,8 +180,10 @@ export class AgentActionExecutor {
     if (restart.startError || restart.exitCode !== 0) {
       return this.failed(request, 'service_restart_failed', 'User service restart failed');
     }
+    const activeTimeoutMs = this.remainingTimeoutMs(request);
+    if (activeTimeoutMs <= 0) return this.timedOut(request);
     const active = await this.processRunner.run('systemctl', ['--user', 'is-active', unit], {
-      timeoutMs,
+      timeoutMs: Math.min(ACTION_TIMEOUTS_MS['service.restart'], activeTimeoutMs),
       maxOutputBytes: MAX_PROCESS_OUTPUT_BYTES,
     });
     if (active.timedOut) return this.timedOut(request);
@@ -238,13 +243,17 @@ export class AgentActionExecutor {
   private resultBase(request: AgentActionRequest) {
     return {
       type: 'agent.action.result' as const,
-      protocolVersion: 2 as const,
+      protocolVersion: AGENT_PROTOCOL_VERSION,
       actionId: request.actionId,
       kind: request.action.kind,
       targetId: request.action.targetId,
       policyRevision: this.policyRevision,
       completedAt: new Date(this.now()).toISOString(),
     };
+  }
+
+  private remainingTimeoutMs(request: AgentActionRequest): number {
+    return Date.parse(request.deadlineAt) - this.now();
   }
 }
 

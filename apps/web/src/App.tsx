@@ -236,6 +236,34 @@ function MachinesPage() {
 function MachineCard({ machine }: { machine: MachineSummary }) {
   const [actions, setActions] = useState<Record<string, MachineActionRecord>>({});
   const [confirmingService, setConfirmingService] = useState<string | undefined>();
+  useEffect(() => {
+    let disposed = false;
+    const loadActions = async () => {
+      try {
+        const response = await fetch(
+          `${apiBaseUrl}/machines/${encodeURIComponent(machine.identity.id)}/actions`,
+        );
+        if (!response.ok) return;
+        const body = (await response.json()) as { actions?: MachineActionRecord[] };
+        if (disposed || !Array.isArray(body.actions)) return;
+        setActions((previous) => {
+          const next = { ...previous };
+          for (const action of body.actions ?? []) {
+            next[`${action.kind}:${action.targetId}`] = action;
+          }
+          return next;
+        });
+      } catch {
+        // The machine card keeps its last known action result during polling gaps.
+      }
+    };
+    void loadActions();
+    const timer = window.setInterval(() => void loadActions(), 2_000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [machine.identity.id]);
   const memory =
     machine.telemetry?.memoryTotalBytes !== undefined
       ? `${formatBytes(machine.telemetry.memoryUsedBytes ?? 0)} / ${formatBytes(machine.telemetry.memoryTotalBytes)}`
@@ -316,7 +344,6 @@ function MachineCard({ machine }: { machine: MachineSummary }) {
                 void submitMachineAction(
                   machine.identity.id,
                   { kind: 'repo.status', targetId: target.id },
-                  actions,
                   setActions,
                 )
               }
@@ -340,6 +367,7 @@ function MachineCard({ machine }: { machine: MachineSummary }) {
                     role="alertdialog"
                     aria-label={`Restart ${target.label}`}
                   >
+                    <strong>Restart {target.label}?</strong>
                     <span>This will temporarily interrupt the configured user service.</span>
                     <div className="action-buttons">
                       <button
@@ -357,7 +385,6 @@ function MachineCard({ machine }: { machine: MachineSummary }) {
                           void submitMachineAction(
                             machine.identity.id,
                             { kind: 'service.restart', targetId: target.id },
-                            actions,
                             setActions,
                           );
                         }}
@@ -446,7 +473,6 @@ function ActionResult({
 async function submitMachineAction(
   machineId: string,
   input: MachineActionInput,
-  current: Record<string, MachineActionRecord>,
   setActions: Dispatch<SetStateAction<Record<string, MachineActionRecord>>>,
 ): Promise<void> {
   const key = `${input.kind}:${input.targetId}`;
@@ -461,7 +487,7 @@ async function submitMachineAction(
     );
     if (!response.ok) throw new Error('The Hub could not dispatch this action.');
     const action = (await response.json()) as MachineActionRecord;
-    setActions({ ...current, [key]: action });
+    setActions((previous) => ({ ...previous, [key]: action }));
     await watchMachineAction(action.actionId, key, setActions);
   } catch (error) {
     const fallback: MachineActionRecord = {
@@ -478,7 +504,7 @@ async function submitMachineAction(
         message: error instanceof Error ? error.message : 'Action dispatch failed',
       },
     };
-    setActions({ ...current, [key]: fallback });
+    setActions((previous) => ({ ...previous, [key]: fallback }));
   }
 }
 
@@ -489,12 +515,16 @@ async function watchMachineAction(
 ): Promise<void> {
   for (let attempt = 0; attempt < 25; attempt += 1) {
     await new Promise((resolve) => window.setTimeout(resolve, 1_000));
-    const response = await fetch(`${apiBaseUrl}/actions/${encodeURIComponent(actionId)}`);
-    if (!response.ok) return;
-    const action = (await response.json()) as MachineActionRecord;
-    setActions((previous) => ({ ...previous, [key]: action }));
-    if (['SUCCEEDED', 'DENIED', 'FAILED', 'TIMED_OUT', 'INTERRUPTED'].includes(action.status))
-      return;
+    try {
+      const response = await fetch(`${apiBaseUrl}/actions/${encodeURIComponent(actionId)}`);
+      if (!response.ok) continue;
+      const action = (await response.json()) as MachineActionRecord;
+      setActions((previous) => ({ ...previous, [key]: action }));
+      if (['SUCCEEDED', 'DENIED', 'FAILED', 'TIMED_OUT', 'INTERRUPTED'].includes(action.status))
+        return;
+    } catch {
+      // Keep polling; transient API/network loss must not become a false failure.
+    }
   }
 }
 

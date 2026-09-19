@@ -20,6 +20,8 @@ const actionLabelSchema = boundedString(100);
 const timestampSchema = z.string().datetime({ offset: true });
 const nonNegativeInteger = z.number().int().finite().nonnegative();
 const nonNegativeNumber = z.number().finite().nonnegative();
+const actionIdSchema = z.string().uuid();
+const policyRevisionSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 
 export const machinePlatformSchema = z.enum([
   'aix',
@@ -158,7 +160,7 @@ export const agentHelloSchema = z
     agentVersion: boundedString(64),
     machine: machineIdentitySchema,
     capabilities: z.array(machineCapabilitySchema).max(64),
-    policyRevision: boundedString(128),
+    policyRevision: policyRevisionSchema,
     actionCatalog: machineActionCatalogSchema,
   })
   .strict();
@@ -229,9 +231,6 @@ export const machineActionInputSchema = z.discriminatedUnion('kind', [
   serviceRestartActionSchema,
 ]);
 export type MachineActionInput = z.infer<typeof machineActionInputSchema>;
-
-const actionIdSchema = z.string().uuid();
-const policyRevisionSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 
 export const agentActionRequestSchema = z
   .object({
@@ -304,6 +303,7 @@ export const actionErrorCodeSchema = z.enum([
   'service_not_active',
   'process_timeout',
   'process_start_failed',
+  'interrupted',
 ]);
 export type ActionErrorCode = z.infer<typeof actionErrorCodeSchema>;
 

@@ -101,6 +101,15 @@ and Hub shutdown mark unresolved Hub actions `INTERRUPTED`; the Hub never
 replays them. A service may already have restarted when a connection drops, so
 network ambiguity is intentionally not retried.
 
+Hub action records move through `PENDING → RUNNING → SUCCEEDED`, `FAILED`, or
+`TIMED_OUT`; authorization denials move directly from `PENDING → DENIED`.
+Disconnect and shutdown use `INTERRUPTED`. Records are persisted in
+`machine_actions` and exposed through `POST /machines/:machineId/actions`,
+`GET /machines/:machineId/actions`, and `GET /actions/:actionId`. The API
+rejects targets not present in the live safe catalog, while the Agent repeats
+the capability, policy-revision, target, deadline, duplicate-ID, and busy checks
+locally before any process is spawned.
+
 Hub must reject unsupported protocol versions cleanly.
 
 ## 3. Enrollment

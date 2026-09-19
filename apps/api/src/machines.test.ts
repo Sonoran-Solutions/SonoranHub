@@ -68,7 +68,7 @@ function hello(machineId = 'machine-x'): AgentHello {
     agentVersion: '0.2.0',
     machine: { id: machineId, name: 'Main PC', platform: 'linux', arch: 'x64' },
     capabilities: ['machine.read.telemetry'],
-    policyRevision: 'sha256:test',
+    policyRevision: `sha256:${'b'.repeat(64)}`,
     actionCatalog: { repositories: [], services: [] },
   };
 }
@@ -394,7 +394,7 @@ describe('MachineHub lifecycle events', () => {
         machineName: 'Main PC',
         protocolVersion: 2,
         agentVersion: '0.2.0',
-        policyRevision: 'sha256:test',
+        policyRevision: `sha256:${'b'.repeat(64)}`,
         capabilities: ['machine.read.telemetry'],
       }),
     );
@@ -539,6 +539,62 @@ describe('MachineHub typed action lifecycle', () => {
     );
   });
 
+  it('interrupts active actions during bounded Hub shutdown', async () => {
+    const actionStore = new InMemoryMachineActionStore();
+    const hub = new MachineHub({
+      store: new InMemoryMachineStore(),
+      actionStore,
+      shutdownGraceMs: 10,
+    });
+    const socket = new FakeSocket();
+    await connectActionAgent(hub, socket);
+    const action = await hub.requestAction('machine-actions', {
+      kind: 'repo.status',
+      targetId: 'repo',
+    });
+    socket.message({
+      type: 'agent.action.accepted',
+      protocolVersion: AGENT_PROTOCOL_VERSION,
+      actionId: action.actionId,
+      acceptedAt: telemetry.capturedAt,
+    });
+    await flushMessages();
+    await hub.close();
+    expect(await actionStore.get(action.actionId)).toMatchObject({
+      status: 'INTERRUPTED',
+      error: { code: 'interrupted' },
+    });
+  });
+
+  it('interrupts old-session actions when a replacement session connects', async () => {
+    const actionStore = new InMemoryMachineActionStore();
+    const hub = new MachineHub({
+      store: new InMemoryMachineStore(),
+      actionStore,
+      shutdownGraceMs: 10,
+    });
+    const first = new FakeSocket();
+    await connectActionAgent(hub, first);
+    const action = await hub.requestAction('machine-actions', {
+      kind: 'repo.status',
+      targetId: 'repo',
+    });
+    first.message({
+      type: 'agent.action.accepted',
+      protocolVersion: AGENT_PROTOCOL_VERSION,
+      actionId: action.actionId,
+      acceptedAt: telemetry.capturedAt,
+    });
+    await flushMessages();
+
+    const replacement = new FakeSocket();
+    await connectActionAgent(hub, replacement);
+    expect(await actionStore.get(action.actionId)).toMatchObject({ status: 'INTERRUPTED' });
+    expect(
+      replacement.sent.some((frame) => JSON.parse(frame).type === 'agent.action.request'),
+    ).toBe(false);
+  });
+
   it('serves action records through the typed API', async () => {
     const hub = new MachineHub({
       store: new InMemoryMachineStore(),
@@ -560,5 +616,27 @@ describe('MachineHub typed action lifecycle', () => {
     expect(fetched.statusCode).toBe(200);
     expect(listed.statusCode).toBe(200);
     expect(listed.json().actions).toHaveLength(1);
+  });
+
+  it('rejects targets that are not in the Agent advertised catalog before dispatch', async () => {
+    const hub = new MachineHub({
+      store: new InMemoryMachineStore(),
+      actionStore: new InMemoryMachineActionStore(),
+      shutdownGraceMs: 10,
+    });
+    const socket = new FakeSocket();
+    await connectActionAgent(hub, socket);
+    const app = buildApp(undefined, { machineHub: hub });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/machines/machine-actions/actions',
+      payload: { kind: 'repo.status', targetId: 'not-advertised' },
+    });
+    await app.close();
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({ error: { code: 'target_not_found' } });
+    expect(socket.sent.some((frame) => JSON.parse(frame).type === 'agent.action.request')).toBe(
+      false,
+    );
   });
 });

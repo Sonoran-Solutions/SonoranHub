@@ -129,6 +129,59 @@ describe('typed Agent actions', () => {
     ]);
   });
 
+  it('returns a bounded failure when the restarted service is not active', async () => {
+    const processes = runner([
+      { exitCode: 0, signal: null, stdout: '', stderr: '', timedOut: false },
+      { exitCode: 3, signal: null, stdout: 'inactive\n', stderr: '', timedOut: false },
+    ]);
+    const executor = new AgentActionExecutor({ policy, processRunner: processes });
+    const execution = executor.execute(request({ kind: 'service.restart', targetId: 'api' }));
+    expect(execution.accepted).toBe(true);
+    if (!execution.accepted) return;
+    await expect(execution.result).resolves.toMatchObject({
+      status: 'failed',
+      error: { code: 'service_not_active' },
+      result: { kind: 'service.restart', active: false },
+    });
+  });
+
+  it('denies an unknown service without spawning systemctl', () => {
+    const processes = runner([]);
+    const executor = new AgentActionExecutor({ policy, processRunner: processes });
+    expect(
+      executor.execute(request({ kind: 'service.restart', targetId: 'unknown-service' })),
+    ).toMatchObject({
+      accepted: false,
+      result: { status: 'denied', error: { code: 'target_not_allowed' } },
+    });
+    expect(processes.calls).toHaveLength(0);
+  });
+
+  it('times out before the second service process when the absolute deadline is exhausted', async () => {
+    let now = 1_000;
+    const calls: Array<{ executable: string; args: readonly string[]; timeoutMs: number }> = [];
+    const processes: ProcessRunner = {
+      run: async (executable, args, options) => {
+        calls.push({ executable, args, timeoutMs: options.timeoutMs });
+        now = 20_001;
+        return { exitCode: 0, signal: null, stdout: '', stderr: '', timedOut: false };
+      },
+    };
+    const action = request(
+      { kind: 'service.restart', targetId: 'api' },
+      {
+        deadlineAt: new Date(20_000).toISOString(),
+      },
+    );
+    const executor = new AgentActionExecutor({ policy, processRunner: processes, now: () => now });
+    const execution = executor.execute(action);
+    expect(execution.accepted).toBe(true);
+    if (!execution.accepted) return;
+    await expect(execution.result).resolves.toMatchObject({ status: 'timed_out' });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.args).toEqual(['--user', 'restart', 'sonoran-api.service']);
+  });
+
   it('denies a second action while the first process is still active', async () => {
     let resolveProcess: ((result: ProcessResult) => void) | undefined;
     const processes: ProcessRunner & { calls: number } = {

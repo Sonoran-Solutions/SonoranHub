@@ -28,12 +28,7 @@ async function postAction(action) {
       body: JSON.stringify(action),
     },
   );
-  const body = await response.json();
-  if (!response.ok)
-    throw new Error(
-      `action request failed with ${response.status}: ${body.error?.code ?? 'unknown'}`,
-    );
-  return body;
+  return { response, body: await response.json() };
 }
 
 async function waitForTerminal(actionId) {
@@ -49,16 +44,20 @@ async function waitForTerminal(actionId) {
 }
 
 const success = await postAction({ kind: 'repo.status', targetId: repository.id });
-const result = await waitForTerminal(success.actionId);
+if (!success.response.ok) {
+  throw new Error(
+    `action request failed with ${success.response.status}: ${success.body.error?.code ?? 'unknown'}`,
+  );
+}
+const result = await waitForTerminal(success.body.actionId);
 if (result.status !== 'SUCCEEDED' || result.result?.kind !== 'repo.status') {
   throw new Error(`repo.status smoke failed: ${result.status}`);
 }
 
 const denied = await postAction({ kind: 'repo.status', targetId: 'definitely-not-allowed' });
-const deniedResult = await waitForTerminal(denied.actionId);
-if (deniedResult.status !== 'DENIED' || deniedResult.error?.code !== 'target_not_allowed') {
+if (denied.response.status !== 404 || denied.body.error?.code !== 'target_not_found') {
   throw new Error(
-    `unknown target smoke expected DENIED/target_not_allowed: ${deniedResult.status}`,
+    `unknown target smoke expected 404/target_not_found: ${denied.response.status}/${denied.body.error?.code}`,
   );
 }
 
@@ -66,7 +65,11 @@ console.log(
   JSON.stringify({
     machineId: machine.identity.id,
     repoStatus: { actionId: result.actionId, status: result.status, result: result.result },
-    unknownTarget: { status: deniedResult.status, reason: deniedResult.error.code },
+    unknownTarget: {
+      status: 'REJECTED',
+      reason: denied.body.error.code,
+      stage: 'hub_advertised_catalog',
+    },
     serviceRestart: 'skipped unless a safe user-level test service is explicitly configured',
   }),
 );

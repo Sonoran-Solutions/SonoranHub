@@ -406,3 +406,7 @@ or bounded Hub shutdown. Pending WebSocket objects are never persisted.
 
 The local Agent policy is the authority for paths, service units, and enabled
 capabilities. The Hub catalog is an early UX check, not a security boundary.
+Hub action dispatch also keeps a durable record and a per-machine in-memory
+reservation so concurrent requests cannot create two active actions. The
+action store enforces immutable identity fields and the allowed lifecycle
+transitions; WebSocket/session objects remain memory-only.

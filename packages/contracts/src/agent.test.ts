@@ -16,12 +16,15 @@ describe('Agent protocol contracts', () => {
       agentVersion: '0.2.0',
       machine: { id: 'main-pc', name: 'Main PC', platform: 'linux', arch: 'x64' },
       capabilities: ['machine.read.telemetry'],
-      policyRevision: 'local-readonly-v1',
+      policyRevision: `sha256:${'a'.repeat(64)}`,
       actionCatalog: { repositories: [], services: [] },
     };
 
     expect(agentClientMessageSchema.parse(hello)).toEqual(hello);
     expect(agentClientMessageSchema.safeParse({ ...hello, unexpected: true }).success).toBe(false);
+    expect(
+      agentClientMessageSchema.safeParse({ ...hello, policyRevision: 'local-readonly-v1' }).success,
+    ).toBe(false);
   });
 
   it('rejects impossible resource values before they reach runtime state', () => {
@@ -42,7 +45,7 @@ describe('Agent protocol contracts', () => {
       protocolVersion: AGENT_PROTOCOL_VERSION,
       agentVersion: '0.2.0',
       capabilities: ['machine.read.telemetry'],
-      policyRevision: 'local-readonly-v1',
+      policyRevision: `sha256:${'a'.repeat(64)}`,
       actionCatalog: { repositories: [], services: [] },
       status: 'OFFLINE',
       lastSeenAt: '2026-09-14T12:00:00.000Z',

@@ -22,6 +22,7 @@ import WebSocket from 'ws';
 
 import { AgentActionExecutor, type ProcessRunner } from './actions.js';
 import {
+  agentPolicySchema,
   createPolicyRevision as createLocalPolicyRevision,
   loadAgentPolicy,
   policyCapabilities,
@@ -298,7 +299,7 @@ export class AgentClient {
       identity = await createMachineIdentity(this.options);
       policy =
         this.localPolicy ??
-        this.options.policy ??
+        (this.options.policy ? agentPolicySchema.parse(this.options.policy) : undefined) ??
         (await loadAgentPolicy({
           path: this.options.policyPath,
           explicit: this.options.policyPath !== undefined,
@@ -512,6 +513,7 @@ export class AgentClient {
 
 if (process.argv[1]?.endsWith('/index.ts') || process.argv[1]?.endsWith('/index.js')) {
   const status = startAgent();
+  const explicitPolicyPath = process.env.SONORAN_AGENT_POLICY_PATH?.trim();
   if (process.env.SONORAN_HUB_URL) {
     if (!process.env.SONORAN_AGENT_TOKEN) {
       console.error(JSON.stringify({ ...status, error: 'SONORAN_AGENT_TOKEN is required' }));
@@ -542,5 +544,15 @@ if (process.argv[1]?.endsWith('/index.ts') || process.argv[1]?.endsWith('/index.
       process.once('SIGINT', stop);
       process.once('SIGTERM', stop);
     }
+  } else if (explicitPolicyPath) {
+    void loadAgentPolicy({ path: explicitPolicyPath, explicit: true }).catch((error: unknown) => {
+      console.error(
+        JSON.stringify({
+          ...status,
+          error: error instanceof Error ? error.message : 'Agent policy validation failed',
+        }),
+      );
+      process.exitCode = 1;
+    });
   }
 }

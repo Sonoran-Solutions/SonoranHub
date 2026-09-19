@@ -29,7 +29,11 @@ import {
 import type { Pool } from 'pg';
 import WebSocket, { WebSocketServer } from 'ws';
 
-import { InMemoryMachineActionStore, type MachineActionStore } from './actions.js';
+import {
+  InMemoryMachineActionStore,
+  isValidMachineActionTransition,
+  type MachineActionStore,
+} from './actions.js';
 
 export interface PersistedMachine {
   readonly identity: MachineIdentity;
@@ -268,6 +272,7 @@ export class MachineHub {
     string,
     { readonly machineId: string; readonly socket: WebSocket; readonly timer: NodeJS.Timeout }
   >();
+  private readonly actionReservations = new Set<string>();
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | undefined;
 
@@ -333,46 +338,64 @@ export class MachineHub {
     if (!state.policyRevision) {
       throw new MachineActionDispatchError('machine_offline', 'Machine policy is unavailable');
     }
-    if ([...this.pendingActions.values()].some((pending) => pending.machineId === machineId)) {
+    const capability = action.kind === 'repo.status' ? 'repo.read' : 'service.restart.allowed';
+    const catalog = state.actionCatalog;
+    const targets = action.kind === 'repo.status' ? catalog?.repositories : catalog?.services;
+    if (
+      !state.capabilities?.includes(capability) ||
+      !targets?.some((target) => target.id === action.targetId)
+    ) {
+      throw new MachineActionDispatchError('target_not_found', 'Action target is not advertised');
+    }
+    if (
+      this.actionReservations.has(machineId) ||
+      [...this.pendingActions.values()].some((pending) => pending.machineId === machineId)
+    ) {
       throw new MachineActionDispatchError('action_busy', 'Machine already has an active action');
     }
 
-    const requestedAt = new Date(this.now()).toISOString();
-    const actionId = randomUUID();
-    const deadlineAt = new Date(this.now() + actionTimeoutMs(action.kind)).toISOString();
-    const record: MachineActionRecord = {
-      actionId,
-      machineId,
-      kind: action.kind,
-      targetId: action.targetId,
-      status: 'PENDING',
-      policyRevision: state.policyRevision,
-      requestedAt,
-    };
-    await this.actionStore.create(record);
-    const timer = setTimeout(
-      () => void this.timeoutAction(actionId),
-      actionTimeoutMs(action.kind) + 100,
-    );
-    this.pendingActions.set(actionId, { machineId, socket: session.socket, timer });
-    this.emitEvent({
-      type: 'agent.action_requested',
-      actionId,
-      actionKind: action.kind,
-      targetId: action.targetId,
-      actionStatus: 'PENDING',
-      policyRevision: state.policyRevision,
-      machineId,
-    });
-    this.send(session.socket, {
-      type: 'agent.action.request',
-      protocolVersion: AGENT_PROTOCOL_VERSION,
-      actionId,
-      policyRevision: state.policyRevision,
-      deadlineAt,
-      action,
-    });
-    return record;
+    this.actionReservations.add(machineId);
+    try {
+      const requestedAt = new Date(this.now()).toISOString();
+      const actionId = randomUUID();
+      const deadlineAt = new Date(this.now() + actionTimeoutMs(action.kind)).toISOString();
+      const record: MachineActionRecord = {
+        actionId,
+        machineId,
+        kind: action.kind,
+        targetId: action.targetId,
+        status: 'PENDING',
+        policyRevision: state.policyRevision,
+        requestedAt,
+      };
+      await this.actionStore.create(record);
+      const timer = setTimeout(
+        () => void this.timeoutAction(actionId),
+        actionTimeoutMs(action.kind) + 100,
+      );
+      this.pendingActions.set(actionId, { machineId, socket: session.socket, timer });
+      this.emitEvent({
+        type: 'agent.action_requested',
+        actionId,
+        actionKind: action.kind,
+        targetId: action.targetId,
+        actionStatus: 'PENDING',
+        policyRevision: state.policyRevision,
+        machineId,
+      });
+      this.send(session.socket, {
+        type: 'agent.action.request',
+        protocolVersion: AGENT_PROTOCOL_VERSION,
+        actionId,
+        policyRevision: state.policyRevision,
+        deadlineAt,
+        action,
+      });
+      return record;
+    } catch (error) {
+      this.actionReservations.delete(machineId);
+      throw error;
+    }
   }
 
   async list(): Promise<ReturnType<typeof machinesResponseSchema.parse>> {
@@ -586,7 +609,11 @@ export class MachineHub {
       this.reject(socket, 'invalid_action_transition', 'Action acceptance is not valid');
       return;
     }
-    await this.transitionAction(action, 'RUNNING', { startedAt: message.acceptedAt });
+    try {
+      await this.transitionAction(action, 'RUNNING', { startedAt: message.acceptedAt });
+    } catch {
+      this.reject(socket, 'invalid_action_transition', 'Action acceptance is not valid');
+    }
   }
 
   private async handleActionResult(
@@ -617,12 +644,23 @@ export class MachineHub {
       this.reject(socket, 'invalid_action_transition', 'Action result is not valid');
       return;
     }
+    if (
+      (action.status === 'PENDING' && message.status !== 'denied') ||
+      (action.status === 'RUNNING' && message.status === 'denied')
+    ) {
+      this.reject(socket, 'invalid_action_transition', 'Action result is not valid');
+      return;
+    }
     const status = resultStatusToMachineStatus(message.status);
-    await this.transitionAction(action, status, {
-      completedAt: message.completedAt,
-      ...(message.result ? { result: message.result } : {}),
-      ...(message.error ? { error: message.error } : {}),
-    });
+    try {
+      await this.transitionAction(action, status, {
+        completedAt: message.completedAt,
+        ...(message.result ? { result: message.result } : {}),
+        ...(message.error ? { error: message.error } : {}),
+      });
+    } catch {
+      this.reject(socket, 'invalid_action_transition', 'Action result is not valid');
+    }
   }
 
   private async transitionAction(
@@ -632,7 +670,7 @@ export class MachineHub {
       Pick<MachineActionRecord, 'startedAt' | 'completedAt' | 'result' | 'error'>
     > = {},
   ): Promise<void> {
-    if (!isValidActionTransition(action.status, status)) {
+    if (!isValidMachineActionTransition(action.status, status)) {
       throw new Error('invalid action transition');
     }
     const next = machineActionRecordSchema.parse({ ...action, ...fields, status });
@@ -673,6 +711,7 @@ export class MachineHub {
     if (!pending) return;
     clearTimeout(pending.timer);
     this.pendingActions.delete(actionId);
+    this.actionReservations.delete(pending.machineId);
   }
 
   private async interruptActionsForSocket(socket: WebSocket): Promise<void> {
@@ -685,6 +724,10 @@ export class MachineHub {
       try {
         await this.transitionAction(action, 'INTERRUPTED', {
           completedAt: new Date(this.now()).toISOString(),
+          error: {
+            code: 'interrupted',
+            message: 'Action interrupted because the Agent disconnected',
+          },
         });
       } catch {
         // A terminal result may have won the disconnect race.
@@ -700,6 +743,7 @@ export class MachineHub {
       try {
         await this.transitionAction(action, 'INTERRUPTED', {
           completedAt: new Date(this.now()).toISOString(),
+          error: { code: 'interrupted', message: 'Action interrupted by Hub shutdown' },
         });
       } catch {
         // A terminal result may have won the shutdown race.
@@ -786,13 +830,20 @@ export class MachineHub {
     }
 
     const closeWait = this.waitForConnections(sockets);
-    let graceTimer: NodeJS.Timeout | undefined;
-    const gracePeriod = new Promise<void>((resolve) => {
-      graceTimer = setTimeout(resolve, this.shutdownGraceMs);
+    let closeGraceTimer: NodeJS.Timeout | undefined;
+    let interruptGraceTimer: NodeJS.Timeout | undefined;
+    const closeGracePeriod = new Promise<void>((resolve) => {
+      closeGraceTimer = setTimeout(resolve, this.shutdownGraceMs);
     });
-    await Promise.race([closeWait, gracePeriod]);
-    await interrupted;
-    if (graceTimer) clearTimeout(graceTimer);
+    const interruptGracePeriod = new Promise<void>((resolve) => {
+      interruptGraceTimer = setTimeout(resolve, this.shutdownGraceMs);
+    });
+    await Promise.all([
+      Promise.race([closeWait, closeGracePeriod]),
+      Promise.race([interrupted, interruptGracePeriod]),
+    ]);
+    if (closeGraceTimer) clearTimeout(closeGraceTimer);
+    if (interruptGraceTimer) clearTimeout(interruptGraceTimer);
     for (const socket of [...this.connections]) {
       socket.terminate();
     }
@@ -802,6 +853,8 @@ export class MachineHub {
     this.connections.clear();
     this.connectionStates.clear();
     this.sessions.clear();
+    this.pendingActions.clear();
+    this.actionReservations.clear();
   }
 
   private async waitForConnections(sockets: readonly WebSocket[]): Promise<void> {
@@ -920,12 +973,6 @@ function isTerminalActionStatus(status: MachineActionStatus): boolean {
 
 function isActiveActionStatus(status: MachineActionStatus): boolean {
   return status === 'PENDING' || status === 'RUNNING';
-}
-
-function isValidActionTransition(from: MachineActionStatus, to: MachineActionStatus): boolean {
-  if (from === 'PENDING') return to === 'RUNNING' || isTerminalActionStatus(to);
-  if (from === 'RUNNING') return isTerminalActionStatus(to);
-  return false;
 }
 
 function actionEventType(

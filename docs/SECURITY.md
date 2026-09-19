@@ -369,3 +369,10 @@ capability, local target resolution, and one-action busy guard. Duplicate IDs
 are rejected for the life of the Agent process. Hub persistence and audit
 metadata exclude local paths, units, policy JSON, raw command output, and
 credentials. There is no automatic action retry after disconnect.
+
+Action audit events are emitted for requested, accepted, denied, succeeded,
+failed, timed-out, and interrupted transitions. They contain only action ID,
+machine ID, typed action kind, logical target ID, policy revision, status, and a
+safe reason/error code. The API exposes only the normalized structured result;
+it does not return command output, repository paths, service units, or policy
+contents.
