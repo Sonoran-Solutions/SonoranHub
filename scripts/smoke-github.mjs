@@ -1,5 +1,7 @@
 /* global console, process */
 
+import fs from 'node:fs';
+
 import {
   GitHubAdapter,
   GitHubAppProjectSource,
@@ -7,7 +9,14 @@ import {
 
 const appId = process.env.GITHUB_APP_ID?.trim();
 const installationId = process.env.GITHUB_INSTALLATION_ID?.trim();
-const privateKey = process.env.GITHUB_PRIVATE_KEY?.trim();
+let privateKey = process.env.GITHUB_PRIVATE_KEY?.trim();
+const privateKeyPath = process.env.GITHUB_PRIVATE_KEY_PATH?.trim();
+
+if (!privateKey && privateKeyPath && fs.existsSync(privateKeyPath)) {
+  privateKey = fs.readFileSync(privateKeyPath, 'utf-8');
+} else if (privateKey && fs.existsSync(privateKey)) {
+  privateKey = fs.readFileSync(privateKey, 'utf-8');
+}
 
 if (!appId || !installationId || !privateKey) {
   console.log(

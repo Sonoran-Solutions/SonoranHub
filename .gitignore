@@ -13,4 +13,7 @@ coverage/
 .DS_Store
 Thumbs.db
 
+*.pem
+*.key
+
 .pnpm-store/

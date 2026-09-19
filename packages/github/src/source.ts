@@ -44,9 +44,13 @@ export class GitHubAppProjectSource implements GitHubProjectSource {
       throw new GitHubIntegrationError('authentication', 'GITHUB_PRIVATE_KEY is empty');
     }
 
+    const privateKey = credentials.privateKey.includes('\\n')
+      ? credentials.privateKey.replace(/\\n/g, '\n')
+      : credentials.privateKey;
+
     this.app = new App({
       appId,
-      privateKey: credentials.privateKey,
+      privateKey,
     });
     this.installationId = installationId;
   }

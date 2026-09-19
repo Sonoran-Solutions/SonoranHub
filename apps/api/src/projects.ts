@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
 import type { Pool } from 'pg';
 
 import type { AppConfig, StructuredLogger } from '@sonoran-hub/config';
@@ -348,9 +349,34 @@ export interface ProjectsRuntimeEnvironment {
   readonly GITHUB_APP_ID?: string;
   readonly GITHUB_INSTALLATION_ID?: string;
   readonly GITHUB_PRIVATE_KEY?: string;
+  readonly GITHUB_PRIVATE_KEY_PATH?: string;
   readonly GITHUB_REFRESH_INTERVAL_MS?: string;
   readonly SONORAN_PROJECTS_PATH?: string;
   readonly DATABASE_URL?: string;
+}
+
+function resolvePrivateKey(environment: ProjectsRuntimeEnvironment): string | undefined {
+  const inlineOrPath = environment.GITHUB_PRIVATE_KEY?.trim();
+  if (inlineOrPath) {
+    if (fs.existsSync(inlineOrPath)) {
+      try {
+        return fs.readFileSync(inlineOrPath, 'utf-8');
+      } catch {
+        // Fall back to treating as inline string
+        return inlineOrPath;
+      }
+    }
+    return inlineOrPath;
+  }
+  const explicitPath = environment.GITHUB_PRIVATE_KEY_PATH?.trim();
+  if (explicitPath && fs.existsSync(explicitPath)) {
+    try {
+      return fs.readFileSync(explicitPath, 'utf-8');
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
 }
 
 export interface ProjectsRuntimeOptions {
@@ -386,7 +412,7 @@ export function createProjectsRuntime(options: ProjectsRuntimeOptions): Projects
   if (!source) {
     const appId = options.environment.GITHUB_APP_ID?.trim();
     const installationId = options.environment.GITHUB_INSTALLATION_ID?.trim();
-    const privateKey = options.environment.GITHUB_PRIVATE_KEY?.trim();
+    const privateKey = resolvePrivateKey(options.environment);
 
     if (appId && installationId && privateKey) {
       try {
