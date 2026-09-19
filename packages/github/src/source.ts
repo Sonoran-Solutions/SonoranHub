@@ -11,7 +11,7 @@ import type {
 
 import { aggregateCiState, type CheckRunItem, type CommitStatusItem } from './ci.js';
 import { classifyGitHubError, GitHubIntegrationError } from './errors.js';
-import type { GitHubProjectSource, GitHubRateLimit } from './types.js';
+import type { GitHubPaginatedList, GitHubProjectSource, GitHubRateLimit } from './types.js';
 import {
   buildGitHubIssueUrl,
   buildGitHubPullUrl,
@@ -19,6 +19,31 @@ import {
   buildGitHubRunUrl,
   isSafeGitHubUrl,
 } from './url.js';
+
+function hasNextPage(linkHeader: unknown): boolean {
+  if (typeof linkHeader !== 'string') return false;
+  return /<[^>]+>;\s*rel="next"/.test(linkHeader) || linkHeader.includes('rel="next"');
+}
+
+async function mapConcurrent<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let currentIndex = 0;
+
+  async function worker(): Promise<void> {
+    while (currentIndex < items.length) {
+      const index = currentIndex++;
+      results[index] = await fn(items[index]!, index);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
 
 export interface GitHubAppCredentials {
   readonly appId: number | string;
@@ -142,7 +167,7 @@ export class GitHubAppProjectSource implements GitHubProjectSource {
   async listOpenPullRequests(
     owner: string,
     repo: string,
-  ): Promise<readonly GitHubPullRequestSummary[]> {
+  ): Promise<GitHubPaginatedList<GitHubPullRequestSummary>> {
     const client = await this.getClient();
     try {
       const response = await client.rest.pulls.list({
@@ -153,37 +178,69 @@ export class GitHubAppProjectSource implements GitHubProjectSource {
         direction: 'desc',
         per_page: 20,
       });
-      this.updateRateLimitFromHeaders(response.headers as Record<string, unknown>);
+      const headers = response.headers as Record<string, unknown>;
+      this.updateRateLimitFromHeaders(headers);
+      const hasMore = hasNextPage(headers['link']);
 
-      const summaries = await Promise.all(
-        response.data.map(async (pr) => {
-          let ciState: CiState = 'unknown';
-          if (pr.head.sha) {
-            try {
-              ciState = await this.getCommitCiState(client, owner, repo, pr.head.sha);
-            } catch {
-              ciState = 'unknown';
+      const prsToEnrich = response.data.slice(0, 10);
+      const remainingPrs = response.data.slice(10);
+
+      const enrichedSummaries = await mapConcurrent(prsToEnrich, 3, async (pr) => {
+        let ciState: CiState = 'unknown';
+        if (pr.head.sha) {
+          try {
+            ciState = await this.getCommitCiState(client, owner, repo, pr.head.sha);
+          } catch (error) {
+            const classified = classifyGitHubError(error);
+            if (
+              classified.code === 'authentication' ||
+              classified.code === 'rate_limited' ||
+              classified.code === 'permission'
+            ) {
+              throw classified;
             }
+            ciState = 'unknown';
           }
+        }
 
-          const htmlUrl =
-            pr.html_url && isSafeGitHubUrl(pr.html_url)
-              ? pr.html_url
-              : buildGitHubPullUrl(owner, repo, pr.number);
+        const htmlUrl =
+          pr.html_url && isSafeGitHubUrl(pr.html_url)
+            ? pr.html_url
+            : buildGitHubPullUrl(owner, repo, pr.number);
 
-          return {
-            number: pr.number,
-            title: pr.title,
-            author: pr.user?.login ?? null,
-            draft: Boolean(pr.draft),
-            updatedAt: pr.updated_at,
-            url: htmlUrl,
-            ciState,
-          };
-        }),
-      );
+        return {
+          number: pr.number,
+          title: pr.title,
+          author: pr.user?.login ?? null,
+          draft: Boolean(pr.draft),
+          updatedAt: pr.updated_at,
+          url: htmlUrl,
+          ciState,
+        };
+      });
 
-      return summaries;
+      const remainingSummaries: GitHubPullRequestSummary[] = remainingPrs.map((pr) => {
+        const htmlUrl =
+          pr.html_url && isSafeGitHubUrl(pr.html_url)
+            ? pr.html_url
+            : buildGitHubPullUrl(owner, repo, pr.number);
+
+        return {
+          number: pr.number,
+          title: pr.title,
+          author: pr.user?.login ?? null,
+          draft: Boolean(pr.draft),
+          updatedAt: pr.updated_at,
+          url: htmlUrl,
+          ciState: 'unknown' as const,
+        };
+      });
+
+      return {
+        items: [...enrichedSummaries, ...remainingSummaries],
+        count: response.data.length,
+        hasMore,
+      };
     } catch (error) {
       throw classifyGitHubError(error);
     }
@@ -193,7 +250,7 @@ export class GitHubAppProjectSource implements GitHubProjectSource {
     owner: string,
     repo: string,
     attentionLabels: readonly string[] = [],
-  ): Promise<readonly GitHubIssueSummary[]> {
+  ): Promise<GitHubPaginatedList<GitHubIssueSummary>> {
     const client = await this.getClient();
     try {
       const response = await client.rest.issues.listForRepo({
@@ -204,13 +261,15 @@ export class GitHubAppProjectSource implements GitHubProjectSource {
         direction: 'desc',
         per_page: 50,
       });
-      this.updateRateLimitFromHeaders(response.headers as Record<string, unknown>);
+      const headers = response.headers as Record<string, unknown>;
+      this.updateRateLimitFromHeaders(headers);
+      const linkHasMore = hasNextPage(headers['link']);
 
       // GitHub Issues API returns PRs as well; filter them out
       const rawIssues = response.data.filter((item) => !item.pull_request);
       const labelFilterSet = new Set(attentionLabels.map((label) => label.trim().toLowerCase()));
 
-      return rawIssues.slice(0, 30).map((issue) => {
+      const items: GitHubIssueSummary[] = rawIssues.slice(0, 30).map((issue) => {
         const labels = issue.labels
           .map((label) => (typeof label === 'string' ? label : (label.name ?? '')))
           .filter(Boolean);
@@ -234,6 +293,14 @@ export class GitHubAppProjectSource implements GitHubProjectSource {
           isAttention,
         };
       });
+
+      const hasMore = linkHasMore || rawIssues.length > 30;
+
+      return {
+        items,
+        count: rawIssues.length,
+        hasMore,
+      };
     } catch (error) {
       throw classifyGitHubError(error);
     }
@@ -270,7 +337,15 @@ export class GitHubAppProjectSource implements GitHubProjectSource {
               ? latestRun.html_url
               : buildGitHubRunUrl(owner, repo, latestRun.id);
         }
-      } catch {
+      } catch (error) {
+        const classified = classifyGitHubError(error);
+        if (
+          classified.code === 'authentication' ||
+          classified.code === 'rate_limited' ||
+          classified.code === 'permission'
+        ) {
+          throw classified;
+        }
         // Workflow runs API might be disabled or unavailable; commit checks remain source of truth
       }
 
@@ -310,8 +385,13 @@ export class GitHubAppProjectSource implements GitHubProjectSource {
           html_url: run.html_url,
         });
       }
-    } catch {
-      // Checks API might not have checks configured
+    } catch (error) {
+      const classified = classifyGitHubError(error);
+      if (classified.code === 'not_found' || classified.status === 422) {
+        // Checks API might not have checks configured
+      } else {
+        throw classified;
+      }
     }
 
     try {
@@ -326,8 +406,13 @@ export class GitHubAppProjectSource implements GitHubProjectSource {
           state: status.state,
         });
       }
-    } catch {
-      // Commit status might be empty
+    } catch (error) {
+      const classified = classifyGitHubError(error);
+      if (classified.code === 'not_found' || classified.status === 422) {
+        // Commit status might be empty
+      } else {
+        throw classified;
+      }
     }
 
     return aggregateCiState(checkRuns, statuses);
@@ -346,11 +431,11 @@ export class UnconfiguredGitHubProjectSource implements GitHubProjectSource {
     throw new GitHubIntegrationError('unconfigured', 'GitHub integration is not configured');
   }
 
-  async listOpenPullRequests(): Promise<readonly GitHubPullRequestSummary[]> {
+  async listOpenPullRequests(): Promise<GitHubPaginatedList<GitHubPullRequestSummary>> {
     throw new GitHubIntegrationError('unconfigured', 'GitHub integration is not configured');
   }
 
-  async listAttentionIssues(): Promise<readonly GitHubIssueSummary[]> {
+  async listAttentionIssues(): Promise<GitHubPaginatedList<GitHubIssueSummary>> {
     throw new GitHubIntegrationError('unconfigured', 'GitHub integration is not configured');
   }
 
@@ -366,8 +451,14 @@ export class UnconfiguredGitHubProjectSource implements GitHubProjectSource {
 export class FakeGitHubProjectSource implements GitHubProjectSource {
   private health: GitHubSourceHealth = { configured: true, available: true };
   private repositories = new Map<string, GitHubRepositorySnapshot>();
-  private pullRequests = new Map<string, GitHubPullRequestSummary[]>();
-  private issues = new Map<string, GitHubIssueSummary[]>();
+  private pullRequests = new Map<
+    string,
+    { items: GitHubPullRequestSummary[]; hasMore: boolean; count?: number }
+  >();
+  private issues = new Map<
+    string,
+    { items: GitHubIssueSummary[]; hasMore: boolean; count?: number }
+  >();
   private ciStates = new Map<string, GitHubCiSummary>();
   private rateLimit: GitHubRateLimit | null = {
     remaining: 5000,
@@ -395,12 +486,32 @@ export class FakeGitHubProjectSource implements GitHubProjectSource {
     );
   }
 
-  setPullRequests(owner: string, repo: string, prs: GitHubPullRequestSummary[]): void {
-    this.pullRequests.set(`${owner.toLowerCase()}/${repo.toLowerCase()}`, prs);
+  setPullRequests(
+    owner: string,
+    repo: string,
+    prs: GitHubPullRequestSummary[],
+    hasMore = false,
+    count?: number,
+  ): void {
+    this.pullRequests.set(`${owner.toLowerCase()}/${repo.toLowerCase()}`, {
+      items: prs,
+      hasMore,
+      count: count ?? prs.length,
+    });
   }
 
-  setIssues(owner: string, repo: string, issues: GitHubIssueSummary[]): void {
-    this.issues.set(`${owner.toLowerCase()}/${repo.toLowerCase()}`, issues);
+  setIssues(
+    owner: string,
+    repo: string,
+    issues: GitHubIssueSummary[],
+    hasMore = false,
+    count?: number,
+  ): void {
+    this.issues.set(`${owner.toLowerCase()}/${repo.toLowerCase()}`, {
+      items: issues,
+      hasMore,
+      count: count ?? issues.length,
+    });
   }
 
   setCiState(owner: string, repo: string, ci: GitHubCiSummary): void {
@@ -425,28 +536,41 @@ export class FakeGitHubProjectSource implements GitHubProjectSource {
   async listOpenPullRequests(
     owner: string,
     repo: string,
-  ): Promise<readonly GitHubPullRequestSummary[]> {
+  ): Promise<GitHubPaginatedList<GitHubPullRequestSummary>> {
     if (this.errorOverride) throw this.errorOverride;
     const key = `${owner.toLowerCase()}/${repo.toLowerCase()}`;
-    return this.pullRequests.get(key) ?? [];
+    const found = this.pullRequests.get(key);
+    if (!found) {
+      return { items: [], count: 0, hasMore: false };
+    }
+    return {
+      items: found.items,
+      count: found.count ?? found.items.length,
+      hasMore: found.hasMore,
+    };
   }
 
   async listAttentionIssues(
     owner: string,
     repo: string,
     attentionLabels: readonly string[] = [],
-  ): Promise<readonly GitHubIssueSummary[]> {
+  ): Promise<GitHubPaginatedList<GitHubIssueSummary>> {
     if (this.errorOverride) throw this.errorOverride;
     const key = `${owner.toLowerCase()}/${repo.toLowerCase()}`;
-    const all = this.issues.get(key) ?? [];
-    if (attentionLabels.length === 0) {
-      return all.map((issue) => ({ ...issue, isAttention: false }));
+    const found = this.issues.get(key);
+    if (!found) {
+      return { items: [], count: 0, hasMore: false };
     }
     const filter = new Set(attentionLabels.map((label) => label.toLowerCase()));
-    return all.map((issue) => ({
+    const items = found.items.map((issue) => ({
       ...issue,
-      isAttention: issue.labels.some((l) => filter.has(l.toLowerCase())),
+      isAttention: filter.size > 0 && issue.labels.some((l) => filter.has(l.toLowerCase())),
     }));
+    return {
+      items,
+      count: found.count ?? found.items.length,
+      hasMore: found.hasMore,
+    };
   }
 
   async getLatestCiState(owner: string, repo: string): Promise<GitHubCiSummary> {

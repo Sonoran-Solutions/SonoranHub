@@ -39,7 +39,10 @@ import {
 import {
   ciStateBadge,
   createResourcePoller,
+  formatBranch,
+  formatCount,
   formatRelativeTime,
+  formatVisibility,
   freshnessBadge,
   initialProjectDetailState,
   initialProjectsState,
@@ -922,9 +925,20 @@ function HomeProjectSummary({
     return <div className="state-panel">No projects configured.</div>;
   }
 
-  const failingCi = projects.reduce((sum, p) => sum + p.attention.failingCi, 0);
-  const openPrs = projects.reduce((sum, p) => sum + p.attention.openPullRequests, 0);
-  const attentionIssues = projects.reduce((sum, p) => sum + p.attention.attentionIssues, 0);
+  const hasUnknownCi = projects.some((p) => p.attention.failingCi === null);
+  const failingCiTotal = hasUnknownCi
+    ? null
+    : projects.reduce((sum, p) => sum + (p.attention.failingCi ?? 0), 0);
+
+  const hasUnknownPr = projects.some((p) => p.attention.openPullRequests === null);
+  const openPrsTotal = hasUnknownPr
+    ? null
+    : projects.reduce((sum, p) => sum + (p.attention.openPullRequests ?? 0), 0);
+
+  const hasUnknownIssues = projects.some((p) => p.attention.attentionIssues === null);
+  const attentionIssuesTotal = hasUnknownIssues
+    ? null
+    : projects.reduce((sum, p) => sum + (p.attention.attentionIssues ?? 0), 0);
 
   const allFresh = projects.every((p) => p.freshness === 'fresh');
   const anyStaleOrUnavailable = projects.some(
@@ -944,18 +958,22 @@ function HomeProjectSummary({
         </p>
       ) : null}
       <div className="home-attention-card">
-        {allFresh && failingCi === 0 && attentionIssues === 0 ? (
+        {allFresh && failingCiTotal === 0 && attentionIssuesTotal === 0 ? (
           <div className="home-healthy-banner">All configured projects healthy</div>
         ) : (
           <div className="home-attention-metrics">
-            <span className={`metric-pill ${failingCi > 0 ? 'metric-pill-danger' : ''}`}>
-              <strong>{failingCi}</strong> failing CI
+            <span
+              className={`metric-pill ${(failingCiTotal ?? 0) > 0 ? 'metric-pill-danger' : ''}`}
+            >
+              <strong>{formatCount(failingCiTotal)}</strong> failing CI
             </span>
             <span className="metric-pill">
-              <strong>{openPrs}</strong> open PRs
+              <strong>{formatCount(openPrsTotal)}</strong> open PRs
             </span>
-            <span className={`metric-pill ${attentionIssues > 0 ? 'metric-pill-warning' : ''}`}>
-              <strong>{attentionIssues}</strong> attention issues
+            <span
+              className={`metric-pill ${(attentionIssuesTotal ?? 0) > 0 ? 'metric-pill-warning' : ''}`}
+            >
+              <strong>{formatCount(attentionIssuesTotal)}</strong> attention issues
             </span>
             {anyStaleOrUnavailable ? (
               <span className="metric-pill metric-pill-muted">
@@ -986,7 +1004,7 @@ function HomeProjectSummary({
               <div className="home-project-row-badges">
                 <span className={ci.className}>{ci.label}</span>
                 <span className="muted">
-                  {project.attention.openPullRequests} PRs · Updated{' '}
+                  {formatCount(project.attention.openPullRequests)} PRs · Updated{' '}
                   {formatRelativeTime(project.lastFetchedAt)}
                 </span>
               </div>
@@ -1079,13 +1097,13 @@ function ProjectCard({
       <div className="project-card-metrics">
         <div>
           <small className="muted">Pull requests</small>
-          <strong>{project.attention.openPullRequests} open</strong>
+          <strong>{formatCount(project.attention.openPullRequests)} open</strong>
         </div>
         <div>
           <small className="muted">Issues</small>
           <strong>
-            {primaryRepo?.openIssueCount ?? 0} open
-            {project.attention.attentionIssues > 0 ? (
+            {formatCount(primaryRepo?.openIssueCount, primaryRepo?.openIssueHasMore)} open
+            {project.attention.attentionIssues !== null && project.attention.attentionIssues > 0 ? (
               <span className="attention-tag">
                 {' '}
                 ({project.attention.attentionIssues} attention)
@@ -1095,13 +1113,14 @@ function ProjectCard({
         </div>
         <div>
           <small className="muted">Default branch</small>
-          <strong>{primaryRepo?.snapshot?.defaultBranch ?? 'main'}</strong>
+          <strong>{formatBranch(primaryRepo?.snapshot?.defaultBranch)}</strong>
         </div>
         <div>
           <small className="muted">Updated</small>
           <strong>{formatRelativeTime(project.lastFetchedAt)}</strong>
         </div>
       </div>
+
       <footer className="project-card-footer">
         <a className="button" href={`/projects/${project.id}`} onClick={onNavigate}>
           Open Cockpit →
@@ -1199,7 +1218,7 @@ function ProjectDetailPage({
                 </span>
               )}
               {' · '}
-              Branch: <strong>{primaryRepo.snapshot?.defaultBranch ?? 'main'}</strong>
+              Branch: <strong>{formatBranch(primaryRepo?.snapshot?.defaultBranch)}</strong>
               {' · '}
               Updated: <strong>{formatRelativeTime(project.lastFetchedAt)}</strong>
             </p>
@@ -1207,13 +1226,13 @@ function ProjectDetailPage({
         </div>
       </header>
 
-      {project.attention.failingCi > 0 || project.attention.attentionIssues > 0 ? (
+      {(project.attention.failingCi ?? 0) > 0 || (project.attention.attentionIssues ?? 0) > 0 ? (
         <div className="attention-banner" role="alert">
           <strong>Attention required:</strong>{' '}
-          {project.attention.failingCi > 0
+          {(project.attention.failingCi ?? 0) > 0
             ? `${project.attention.failingCi} failing CI checks. `
             : ''}
-          {project.attention.attentionIssues > 0
+          {(project.attention.attentionIssues ?? 0) > 0
             ? `${project.attention.attentionIssues} issues flagged for attention.`
             : ''}
         </div>
@@ -1265,23 +1284,27 @@ function OverviewTab({ project }: { project: ProjectDetail }) {
         </div>
         <div className="stat-card">
           <small className="muted">Open PRs</small>
-          <strong className="stat-value">{project.attention.openPullRequests}</strong>
+          <strong className="stat-value">{formatCount(project.attention.openPullRequests)}</strong>
         </div>
         <div className="stat-card">
           <small className="muted">Attention Issues</small>
           <strong
-            className={`stat-value ${project.attention.attentionIssues > 0 ? 'text-warning' : ''}`}
+            className={`stat-value ${(project.attention.attentionIssues ?? 0) > 0 ? 'text-warning' : ''}`}
           >
-            {project.attention.attentionIssues}
+            {formatCount(project.attention.attentionIssues)}
           </strong>
         </div>
         <div className="stat-card">
           <small className="muted">Total Issues</small>
-          <strong className="stat-value">{primaryRepo?.openIssueCount ?? 0}</strong>
+          <strong className="stat-value">
+            {formatCount(primaryRepo?.openIssueCount, primaryRepo?.openIssueHasMore)}
+          </strong>
         </div>
         <div className="stat-card">
           <small className="muted">Default Branch</small>
-          <strong className="stat-value">{primaryRepo?.snapshot?.defaultBranch ?? 'main'}</strong>
+          <strong className="stat-value">
+            {formatBranch(primaryRepo?.snapshot?.defaultBranch)}
+          </strong>
         </div>
         <div className="stat-card">
           <small className="muted">Last Active</small>
@@ -1317,8 +1340,8 @@ function OverviewTab({ project }: { project: ProjectDetail }) {
                 {repo.snapshot?.primaryLanguage ? (
                   <span>Language: {repo.snapshot.primaryLanguage}</span>
                 ) : null}
-                <span>{repo.snapshot?.isPrivate ? 'Private' : 'Public'}</span>
-                <span>Branch: {repo.snapshot?.defaultBranch ?? 'main'}</span>
+                <span>Visibility: {formatVisibility(repo.snapshot?.isPrivate)}</span>
+                <span>Branch: {formatBranch(repo.snapshot?.defaultBranch)}</span>
                 <span>Pushed: {formatRelativeTime(repo.snapshot?.pushedAt)}</span>
               </div>
             </div>
@@ -1459,10 +1482,10 @@ function GitHubTab({ project }: { project: ProjectDetail }) {
             </p>
             <div className="repo-meta">
               <span>
-                Default Branch: <strong>{primaryRepo.snapshot.defaultBranch}</strong>
+                Default Branch: <strong>{formatBranch(primaryRepo.snapshot.defaultBranch)}</strong>
               </span>
               <span>
-                Visibility: <strong>{primaryRepo.snapshot.isPrivate ? 'Private' : 'Public'}</strong>
+                Visibility: <strong>{formatVisibility(primaryRepo.snapshot.isPrivate)}</strong>
               </span>
               <span>
                 Archived: <strong>{primaryRepo.snapshot.isArchived ? 'Yes' : 'No'}</strong>
@@ -1503,6 +1526,7 @@ function GitHubTab({ project }: { project: ProjectDetail }) {
                   {project.latestCi.updatedAt
                     ? `Updated ${formatRelativeTime(project.latestCi.updatedAt)}`
                     : 'Recent run'}
+                  {project.latestCi.conclusion ? ` · ${project.latestCi.conclusion}` : ''}
                 </p>
               </div>
               <span className={ciStateBadge(project.latestCi.status).className}>

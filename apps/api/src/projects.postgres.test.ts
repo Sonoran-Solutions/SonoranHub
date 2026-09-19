@@ -85,13 +85,17 @@ describe.skipIf(!hasDatabase)('PostgresProjectStore', () => {
               url: 'https://github.com/Sonoran-Solutions/SonoranHub',
             },
             ciState: 'success' as const,
+            latestCi: null,
             openPullRequests: [],
             attentionIssues: [],
             openPrCount: 0,
+            openPrHasMore: false,
             openIssueCount: 0,
+            openIssueHasMore: false,
             attentionIssueCount: 0,
             freshness: 'fresh' as const,
           },
+
         ],
         attention: {
           failingCi: 0,

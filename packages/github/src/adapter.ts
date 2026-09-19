@@ -5,6 +5,7 @@ import type {
   GitHubSourceHealth,
 } from '@sonoran-hub/contracts';
 
+
 import { GitHubIntegrationError } from './errors.js';
 import type { GitHubProjectSource, GitHubRateLimit, NormalizedRepositoryResult } from './types.js';
 
@@ -27,7 +28,9 @@ export class GitHubAdapter {
 
   /**
    * Asserts at runtime that no mutating GitHub methods are defined on this adapter or its source.
-   * This guarantees that Phase 2A remains strictly read-only.
+   * This is an active, defensive runtime invariant checking against developer regression
+   * (e.g., verifying that no mutation methods have been added to the adapter or source).
+   * Note: Octokit-level read-only enforcement is governed by GitHub App installation permissions.
    */
   assertReadOnly(): void {
     const forbiddenMethods = [
@@ -62,14 +65,18 @@ export class GitHubAdapter {
   async probe(): Promise<GitHubSourceHealth> {
     try {
       const health = await this.source.probe();
-      this.lastHealth = health;
-      return health;
+      this.lastHealth = {
+        ...health,
+        lastSuccessfulRefresh: this.lastSuccessfulRefresh,
+      };
+      return this.lastHealth;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'GitHub probe failed';
       this.lastHealth = {
         configured: true,
         available: false,
         lastError: { code: 'unavailable', message },
+        lastSuccessfulRefresh: this.lastSuccessfulRefresh,
       };
       return this.lastHealth;
     }
@@ -106,11 +113,18 @@ export class GitHubAdapter {
 
       repoError = { code: err.code, message: err.message };
 
-      if (err.code === 'rate_limited') {
+      if (
+        err.code === 'rate_limited' ||
+        err.code === 'authentication' ||
+        err.code === 'permission'
+      ) {
+        const rateLimit = await this.source.getRateLimit().catch(() => null);
         this.lastHealth = {
           configured: true,
           available: false,
           lastError: repoError,
+          rateLimit,
+          lastSuccessfulRefresh: this.lastSuccessfulRefresh,
         };
       }
 
@@ -129,11 +143,14 @@ export class GitHubAdapter {
         primary,
         snapshot: null,
         ciState: 'unknown',
+        latestCi: null,
         openPullRequests: [],
         attentionIssues: [],
-        openPrCount: 0,
-        openIssueCount: 0,
-        attentionIssueCount: 0,
+        openPrCount: null,
+        openPrHasMore: false,
+        openIssueCount: null,
+        openIssueHasMore: false,
+        attentionIssueCount: null,
         freshness: 'unavailable',
         error: repoError,
       };
@@ -148,7 +165,11 @@ export class GitHubAdapter {
           ? error
           : new GitHubIntegrationError('unavailable', 'Failed to fetch pull requests');
       partialError = { code: classified.code, message: classified.message };
-      return previousResult?.openPullRequests ?? [];
+      return {
+        items: previousResult?.openPullRequests ?? [],
+        count: previousResult?.openPrCount ?? null,
+        hasMore: previousResult?.openPrHasMore ?? false,
+      };
     });
 
     const issuesPromise = this.source
@@ -159,7 +180,11 @@ export class GitHubAdapter {
             ? error
             : new GitHubIntegrationError('unavailable', 'Failed to fetch issues');
         partialError = { code: classified.code, message: classified.message };
-        return previousResult?.attentionIssues ?? [];
+        return {
+          items: previousResult?.attentionIssues ?? [],
+          count: previousResult?.openIssueCount ?? null,
+          hasMore: previousResult?.openIssueHasMore ?? false,
+        };
       });
 
     const ciPromise = this.source
@@ -170,27 +195,52 @@ export class GitHubAdapter {
             ? error
             : new GitHubIntegrationError('unavailable', 'Failed to fetch CI state');
         partialError = { code: classified.code, message: classified.message };
-        return {
-          status: previousResult?.ciState ?? ('unknown' as CiState),
-          conclusion: null,
-        };
+        return (
+          previousResult?.latestCi ?? {
+            status: previousResult?.ciState ?? ('unknown' as CiState),
+            conclusion: null,
+          }
+        );
       });
 
-    const [pullRequests, issues, ciSummary] = await Promise.all([
+    const [pullRequestsResult, issuesResult, ciSummary] = await Promise.all([
       prPromise,
       issuesPromise,
       ciPromise,
     ]);
 
-    const attentionIssues = issues.filter((i) => i.isAttention);
-    const freshness: GitHubFreshness = partialError ? 'partial' : 'fresh';
+    // attentionIssues must only contain issues flagged as attention!
+    const attentionIssues = issuesResult.items.filter((i) => i.isAttention);
+    const attentionIssueCount =
+      issuesResult.count !== null
+        ? attentionIssues.length
+        : (previousResult?.attentionIssueCount ?? null);
 
-    this.lastSuccessfulRefresh = new Date().toISOString();
-    this.lastHealth = {
-      configured: true,
-      available: true,
-      lastSuccessfulRefresh: this.lastSuccessfulRefresh,
-    };
+    const freshness: GitHubFreshness = partialError ? 'partial' : 'fresh';
+    const rateLimit = await this.source.getRateLimit().catch(() => null);
+
+    if (
+      partialError &&
+      (partialError.code === 'rate_limited' ||
+        partialError.code === 'authentication' ||
+        partialError.code === 'permission')
+    ) {
+      this.lastHealth = {
+        configured: true,
+        available: false,
+        lastError: partialError,
+        rateLimit,
+        lastSuccessfulRefresh: this.lastSuccessfulRefresh,
+      };
+    } else {
+      this.lastSuccessfulRefresh = new Date().toISOString();
+      this.lastHealth = {
+        configured: true,
+        available: true,
+        rateLimit,
+        lastSuccessfulRefresh: this.lastSuccessfulRefresh,
+      };
+    }
 
     return {
       owner,
@@ -198,11 +248,14 @@ export class GitHubAdapter {
       primary,
       snapshot,
       ciState: ciSummary.status,
-      openPullRequests: pullRequests,
-      attentionIssues: issues,
-      openPrCount: pullRequests.length,
-      openIssueCount: issues.length,
-      attentionIssueCount: attentionIssues.length,
+      latestCi: ciSummary,
+      openPullRequests: pullRequestsResult.items,
+      attentionIssues,
+      openPrCount: pullRequestsResult.count,
+      openPrHasMore: pullRequestsResult.hasMore,
+      openIssueCount: issuesResult.count,
+      openIssueHasMore: issuesResult.hasMore,
+      attentionIssueCount,
       freshness,
       error: partialError,
     };

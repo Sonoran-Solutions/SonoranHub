@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  projectAttentionSummarySchema,
   projectConfigSchema,
   projectIdSchema,
+  projectRepositorySummarySchema,
   projectsConfigFileSchema,
   projectsResponseSchema,
   projectDetailResponseSchema,
@@ -219,5 +221,53 @@ describe('Project Contracts', () => {
       generatedAt: '2026-09-18T20:01:00.000Z',
     };
     expect(projectDetailResponseSchema.safeParse(response).success).toBe(true);
+  });
+
+  it('validates nullable counts and hasMore flags when data is unavailable or paginated', () => {
+    const unavailableRepo = {
+      owner: 'Sonoran-Solutions',
+      name: 'SonoranHub',
+      primary: true,
+      ciState: 'unknown' as const,
+      latestCi: null,
+      openPrCount: null,
+      openPrHasMore: false,
+      openIssueCount: null,
+      openIssueHasMore: false,
+      attentionIssueCount: null,
+      freshness: 'unavailable' as const,
+    };
+    expect(projectRepositorySummarySchema.safeParse(unavailableRepo).success).toBe(true);
+
+    const paginatedRepo = {
+      owner: 'Sonoran-Solutions',
+      name: 'SonoranHub',
+      primary: true,
+      ciState: 'pending' as const,
+      latestCi: {
+        status: 'pending' as const,
+      },
+      openPrCount: 20,
+      openPrHasMore: true,
+      openIssueCount: 30,
+      openIssueHasMore: true,
+      attentionIssueCount: 5,
+      freshness: 'fresh' as const,
+    };
+    const parsed = projectRepositorySummarySchema.safeParse(paginatedRepo);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.openPrHasMore).toBe(true);
+      expect(parsed.data.openIssueHasMore).toBe(true);
+    }
+  });
+
+  it('validates nullable project attention aggregates when underlying data is unknown', () => {
+    const unknownAttention = {
+      failingCi: null,
+      openPullRequests: null,
+      attentionIssues: null,
+    };
+    expect(projectAttentionSummarySchema.safeParse(unknownAttention).success).toBe(true);
   });
 });

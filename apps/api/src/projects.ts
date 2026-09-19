@@ -1,6 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
 import type { Pool } from 'pg';
 
 import type { AppConfig, StructuredLogger } from '@sonoran-hub/config';
@@ -175,24 +173,34 @@ export class ProjectService {
                 primary: repo.primary,
                 snapshot: null,
                 ciState: 'unknown',
+                latestCi: null,
                 openPullRequests: [],
                 attentionIssues: [],
-                openPrCount: 0,
-                openIssueCount: 0,
-                attentionIssueCount: 0,
+                openPrCount: null,
+                openPrHasMore: false,
+                openIssueCount: null,
+                openIssueHasMore: false,
+                attentionIssueCount: null,
                 freshness: 'unavailable',
               });
             }
           }
         }
 
-        // Aggregate project attention metrics
-        const failingCi = normalizedRepositories.filter((r) => r.ciState === 'failure').length;
-        const openPullRequests = normalizedRepositories.reduce((sum, r) => sum + r.openPrCount, 0);
-        const attentionIssues = normalizedRepositories.reduce(
-          (sum, r) => sum + r.attentionIssueCount,
-          0,
-        );
+        // Aggregate project attention metrics honestly: unknown is not zero
+        const hasKnownCi = normalizedRepositories.some((r) => r.ciState !== 'unknown');
+        const failingCiCount = normalizedRepositories.filter((r) => r.ciState === 'failure').length;
+        const failingCi = failingCiCount > 0 ? failingCiCount : hasKnownCi ? 0 : null;
+
+        const hasUnknownPr = normalizedRepositories.some((r) => r.openPrCount === null);
+        const openPullRequests = hasUnknownPr
+          ? null
+          : normalizedRepositories.reduce((sum, r) => sum + (r.openPrCount ?? 0), 0);
+
+        const hasUnknownIssues = normalizedRepositories.some((r) => r.attentionIssueCount === null);
+        const attentionIssues = hasUnknownIssues
+          ? null
+          : normalizedRepositories.reduce((sum, r) => sum + (r.attentionIssueCount ?? 0), 0);
 
         const attention: ProjectAttentionSummary = {
           failingCi,
@@ -267,12 +275,14 @@ export class ProjectService {
     const openPullRequests = primaryRepoData ? [...primaryRepoData.openPullRequests] : [];
     const attentionIssues = primaryRepoData ? [...primaryRepoData.attentionIssues] : [];
 
-    const latestCi = primaryRepoData
-      ? {
-          status: primaryRepoData.ciState,
-          conclusion: primaryRepoData.ciState === 'success' ? 'success' : null,
-        }
-      : null;
+    const latestCi =
+      primaryRepoData?.latestCi ??
+      (primaryRepoData
+        ? {
+            status: primaryRepoData.ciState,
+            conclusion: null,
+          }
+        : null);
 
     const detail: ProjectDetail = {
       ...summary,
@@ -311,9 +321,12 @@ export class ProjectService {
         primary: repoConfig.primary,
         snapshot: repoData?.snapshot ?? null,
         ciState: repoData?.ciState ?? ('unknown' as CiState),
-        openPrCount: repoData?.openPrCount ?? 0,
-        openIssueCount: repoData?.openIssueCount ?? 0,
-        attentionIssueCount: repoData?.attentionIssueCount ?? 0,
+        latestCi: repoData?.latestCi ?? null,
+        openPrCount: repoData ? repoData.openPrCount : null,
+        openPrHasMore: repoData?.openPrHasMore ?? false,
+        openIssueCount: repoData ? repoData.openIssueCount : null,
+        openIssueHasMore: repoData?.openIssueHasMore ?? false,
+        attentionIssueCount: repoData ? repoData.attentionIssueCount : null,
         freshness,
         error: repoData?.error ?? null,
       };
@@ -322,9 +335,9 @@ export class ProjectService {
     const primaryRepository = repoSummaries.find((r) => r.primary) ?? repoSummaries[0] ?? null;
 
     const attention: ProjectAttentionSummary = snapshot?.data.attention ?? {
-      failingCi: 0,
-      openPullRequests: 0,
-      attentionIssues: 0,
+      failingCi: null,
+      openPullRequests: null,
+      attentionIssues: null,
     };
 
     const freshness: GitHubFreshness = !sourceHealth.configured
@@ -350,47 +363,9 @@ export interface ProjectsRuntimeEnvironment {
   readonly GITHUB_APP_ID?: string;
   readonly GITHUB_INSTALLATION_ID?: string;
   readonly GITHUB_PRIVATE_KEY?: string;
-  readonly GITHUB_PRIVATE_KEY_PATH?: string;
   readonly GITHUB_REFRESH_INTERVAL_MS?: string;
   readonly SONORAN_PROJECTS_PATH?: string;
   readonly DATABASE_URL?: string;
-}
-
-function findExistingKeyFile(pathOrName: string): string | undefined {
-  const candidates = [
-    pathOrName,
-    path.resolve(process.cwd(), pathOrName),
-    path.resolve(process.cwd(), '../../', pathOrName),
-    path.resolve(process.cwd(), '../', pathOrName),
-  ];
-  return candidates.find((p) => fs.existsSync(p));
-}
-
-function resolvePrivateKey(environment: ProjectsRuntimeEnvironment): string | undefined {
-  const inlineOrPath = environment.GITHUB_PRIVATE_KEY?.trim();
-  if (inlineOrPath) {
-    const file = findExistingKeyFile(inlineOrPath);
-    if (file) {
-      try {
-        return fs.readFileSync(file, 'utf-8');
-      } catch {
-        return inlineOrPath;
-      }
-    }
-    return inlineOrPath;
-  }
-  const explicitPath = environment.GITHUB_PRIVATE_KEY_PATH?.trim();
-  if (explicitPath) {
-    const file = findExistingKeyFile(explicitPath);
-    if (file) {
-      try {
-        return fs.readFileSync(file, 'utf-8');
-      } catch {
-        return undefined;
-      }
-    }
-  }
-  return undefined;
 }
 
 export interface ProjectsRuntimeOptions {
@@ -426,7 +401,7 @@ export function createProjectsRuntime(options: ProjectsRuntimeOptions): Projects
   if (!source) {
     const appId = options.environment.GITHUB_APP_ID?.trim();
     const installationId = options.environment.GITHUB_INSTALLATION_ID?.trim();
-    const privateKey = resolvePrivateKey(options.environment);
+    const privateKey = options.environment.GITHUB_PRIVATE_KEY?.trim();
 
     if (appId && installationId && privateKey) {
       try {

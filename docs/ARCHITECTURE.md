@@ -354,12 +354,15 @@ Fastify GET /projects and GET /projects/:projectId
 React UI (/projects, /projects/:projectId cockpit, Home attention card)
 ```
 
-#### Read-only enforcement
+#### Read-only runtime invariant
 
-The integration boundary (`packages/github`) asserts read-only operation at
-runtime via `assertReadOnly()`. No mutating GitHub endpoints (creating/updating
-issues, pull requests, comments, checks, or ref updates) are exposed or callable
-by the adapter.
+The integration boundary (`packages/github`) asserts read-only operation as an active,
+defensive runtime invariant via `assertReadOnly()`, checking against developer regression
+(verifying that no mutating methods have been added to the adapter or source).
+Actual API-level read-only enforcement is governed by GitHub App installation permissions.
+No mutating GitHub endpoints (creating/updating issues, pull requests, comments, checks,
+or ref updates) are exposed or callable by the adapter.
+
 
 #### CI status aggregation
 

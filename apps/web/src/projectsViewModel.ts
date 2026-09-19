@@ -191,3 +191,24 @@ export function isSafeGitHubUrl(url: string | null | undefined): boolean {
   if (!url || typeof url !== 'string') return false;
   return url.startsWith('https://github.com/');
 }
+
+export function formatCount(count: number | null | undefined, hasMore = false): string {
+  if (count === null || count === undefined) {
+    return '—';
+  }
+  return hasMore ? `${count}+` : `${count}`;
+}
+
+export function formatBranch(branch: string | null | undefined): string {
+  if (!branch || !branch.trim()) {
+    return 'Unknown';
+  }
+  return branch;
+}
+
+export function formatVisibility(isPrivate: boolean | null | undefined): string {
+  if (isPrivate === null || isPrivate === undefined) {
+    return 'Unknown';
+  }
+  return isPrivate ? 'Private' : 'Public';
+}

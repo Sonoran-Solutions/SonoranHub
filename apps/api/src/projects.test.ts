@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   GitHubAdapter,
   FakeGitHubProjectSource,
+  GitHubIntegrationError,
   UnconfiguredGitHubProjectSource,
 } from '@sonoran-hub/github';
 
@@ -163,6 +164,87 @@ describe('ProjectService & Store', () => {
     service.stop();
   });
 
+  it('preserves null counts and nullable attention aggregates when GitHub data is unavailable', async () => {
+    const store = new InMemoryProjectStore();
+    const source = new FakeGitHubProjectSource();
+    // Simulate repository not found / metadata failure
+    source.setError(new GitHubIntegrationError('not_found', 'Repository not found', 404));
+
+    const adapter = new GitHubAdapter(source);
+    const service = new ProjectService({
+      store,
+      adapter,
+      projectConfig: sampleConfig,
+      refreshIntervalMs: 0,
+    });
+
+    await service.start();
+
+    const listResult = await service.list();
+    expect(listResult.projects).toHaveLength(1);
+    const projectSummary = listResult.projects[0]!;
+    expect(projectSummary.repositories[0]!.openPrCount).toBeNull();
+    expect(projectSummary.repositories[0]!.openIssueCount).toBeNull();
+    expect(projectSummary.repositories[0]!.attentionIssueCount).toBeNull();
+    expect(projectSummary.repositories[0]!.snapshot).toBeNull();
+    expect(projectSummary.repositories[0]!.ciState).toBe('unknown');
+
+    // Project-level attention aggregates must NOT be fake zeroes
+    expect(projectSummary.attention.openPullRequests).toBeNull();
+    expect(projectSummary.attention.attentionIssues).toBeNull();
+    expect(projectSummary.attention.failingCi).toBeNull();
+    expect(projectSummary.freshness).toBe('unavailable');
+
+    service.stop();
+  });
+
+  it('preserves real CI summary metadata end-to-end', async () => {
+    const store = new InMemoryProjectStore();
+    const source = new FakeGitHubProjectSource();
+    source.setRepository({
+      owner: 'Sonoran-Solutions',
+      name: 'SonoranHub',
+      defaultBranch: 'main',
+      isPrivate: false,
+      isArchived: false,
+      description: 'Control plane',
+      primaryLanguage: 'TypeScript',
+      updatedAt: '2026-09-18T20:00:00.000Z',
+      pushedAt: '2026-09-18T20:00:00.000Z',
+      url: 'https://github.com/Sonoran-Solutions/SonoranHub',
+    });
+    source.setCiState('Sonoran-Solutions', 'SonoranHub', {
+      status: 'failure',
+      conclusion: 'timed_out',
+      workflowName: 'Test & Lint Suite',
+      runUrl: 'https://github.com/Sonoran-Solutions/SonoranHub/actions/runs/998877',
+      updatedAt: '2026-09-18T20:05:00.000Z',
+    });
+
+    const adapter = new GitHubAdapter(source);
+    const service = new ProjectService({
+      store,
+      adapter,
+      projectConfig: sampleConfig,
+      refreshIntervalMs: 0,
+    });
+
+    await service.start();
+
+    const detailResult = await service.get('sonoran-hub');
+    expect(detailResult).not.toBeNull();
+    expect(detailResult!.project.latestCi).toEqual({
+      status: 'failure',
+      conclusion: 'timed_out',
+      workflowName: 'Test & Lint Suite',
+      runUrl: 'https://github.com/Sonoran-Solutions/SonoranHub/actions/runs/998877',
+      updatedAt: '2026-09-18T20:05:00.000Z',
+    });
+    expect(detailResult!.project.attention.failingCi).toBe(1);
+
+    service.stop();
+  });
+
   it('handles unconfigured GitHub source gracefully without failing', async () => {
     const store = new InMemoryProjectStore();
     const source = new UnconfiguredGitHubProjectSource();
@@ -180,6 +262,9 @@ describe('ProjectService & Store', () => {
     expect(listResult.projects).toHaveLength(1);
     expect(listResult.sourceHealth.configured).toBe(false);
     expect(listResult.projects[0]!.freshness).toBe('unavailable');
+    expect(listResult.projects[0]!.attention.openPullRequests).toBeNull();
+    expect(listResult.projects[0]!.attention.attentionIssues).toBeNull();
+    expect(listResult.projects[0]!.attention.failingCi).toBeNull();
 
     service.stop();
   });

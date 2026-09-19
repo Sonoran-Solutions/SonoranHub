@@ -245,7 +245,8 @@ Every write action creates an audit event.
 
 ## F1 — GitHub integration configuration [P0] — Implemented (Phase 2A)
 
-Use a GitHub App/integration with minimum read-only permissions (`Metadata`, `Pull Requests`, `Issues`, `Actions`, `Checks`, `Commit statuses`, `Contents`). Read-only adapter enforced at runtime.
+Use a GitHub App/integration with minimum read-only permissions (`Metadata`, `Pull Requests`, `Issues`, `Actions`, `Checks`, `Commit statuses`). Read-only adapter enforced at runtime.
+
 
 ## F2 — Project/repository model [P0] — Implemented (Phase 2A)
 

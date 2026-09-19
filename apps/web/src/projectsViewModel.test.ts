@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ciStateBadge,
+  formatBranch,
+  formatCount,
   formatRelativeTime,
+  formatVisibility,
   freshnessBadge,
   isSafeGitHubUrl,
 } from './projectsViewModel.js';
@@ -69,5 +72,30 @@ describe('Projects View Model Helpers', () => {
     expect(isSafeGitHubUrl('https://evil.com/fake')).toBe(false);
     expect(isSafeGitHubUrl(null)).toBe(false);
     expect(isSafeGitHubUrl(undefined)).toBe(false);
+  });
+
+  it('formats counts with null-safety and hasMore support', () => {
+    expect(formatCount(null)).toBe('—');
+    expect(formatCount(undefined)).toBe('—');
+    expect(formatCount(0)).toBe('0');
+    expect(formatCount(5)).toBe('5');
+    expect(formatCount(20, true)).toBe('20+');
+    expect(formatCount(null, true)).toBe('—');
+  });
+
+  it('formats branch with fallback to Unknown when missing', () => {
+    expect(formatBranch(null)).toBe('Unknown');
+    expect(formatBranch(undefined)).toBe('Unknown');
+    expect(formatBranch('')).toBe('Unknown');
+    expect(formatBranch('   ')).toBe('Unknown');
+    expect(formatBranch('main')).toBe('main');
+    expect(formatBranch('develop')).toBe('develop');
+  });
+
+  it('formats visibility with fallback to Unknown when missing', () => {
+    expect(formatVisibility(null)).toBe('Unknown');
+    expect(formatVisibility(undefined)).toBe('Unknown');
+    expect(formatVisibility(true)).toBe('Private');
+    expect(formatVisibility(false)).toBe('Public');
   });
 });

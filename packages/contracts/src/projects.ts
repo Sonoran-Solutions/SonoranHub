@@ -178,9 +178,9 @@ export const gitHubSourceHealthSchema = z
 
 export const projectAttentionSummarySchema = z
   .object({
-    failingCi: z.number().int().nonnegative(),
-    openPullRequests: z.number().int().nonnegative(),
-    attentionIssues: z.number().int().nonnegative(),
+    failingCi: z.number().int().nonnegative().nullable(),
+    openPullRequests: z.number().int().nonnegative().nullable(),
+    attentionIssues: z.number().int().nonnegative().nullable(),
   })
   .strict();
 
@@ -191,9 +191,12 @@ export const projectRepositorySummarySchema = z
     primary: z.boolean(),
     snapshot: githubRepositorySnapshotSchema.nullable().optional(),
     ciState: ciStateSchema,
-    openPrCount: z.number().int().nonnegative(),
-    openIssueCount: z.number().int().nonnegative(),
-    attentionIssueCount: z.number().int().nonnegative(),
+    latestCi: githubCiSummarySchema.nullable().optional(),
+    openPrCount: z.number().int().nonnegative().nullable(),
+    openPrHasMore: z.boolean().default(false),
+    openIssueCount: z.number().int().nonnegative().nullable(),
+    openIssueHasMore: z.boolean().default(false),
+    attentionIssueCount: z.number().int().nonnegative().nullable(),
     freshness: githubFreshnessSchema,
     error: z
       .object({

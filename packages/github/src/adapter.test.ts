@@ -82,11 +82,93 @@ describe('GitHubAdapter', () => {
     expect(result.primary).toBe(true);
     expect(result.snapshot).toEqual(sampleRepo);
     expect(result.ciState).toBe('success');
+    expect(result.latestCi?.workflowName).toBe('CI');
+    expect(result.latestCi?.runUrl).toBe(
+      'https://github.com/Sonoran-Solutions/SonoranHub/actions/runs/12345',
+    );
     expect(result.openPrCount).toBe(2);
+    expect(result.openPrHasMore).toBe(false);
     expect(result.openIssueCount).toBe(2);
+    expect(result.openIssueHasMore).toBe(false);
     expect(result.attentionIssueCount).toBe(1);
+    expect(result.attentionIssues).toHaveLength(1);
+    expect(result.attentionIssues[0]?.number).toBe(10);
     expect(result.freshness).toBe('fresh');
     expect(result.error).toBeUndefined();
+  });
+
+  it('returns null counts and unavailable freshness when repository metadata fails without previous result', async () => {
+    const source = new FakeGitHubProjectSource();
+    source.setError(new GitHubIntegrationError('not_found', 'Repository not found', 404));
+
+    const adapter = new GitHubAdapter(source);
+    const result = await adapter.collectRepository({
+      owner: 'Sonoran-Solutions',
+      name: 'NonExistent',
+      primary: true,
+    });
+
+    expect(result.snapshot).toBeNull();
+    expect(result.openPrCount).toBeNull();
+    expect(result.openPrHasMore).toBe(false);
+    expect(result.openIssueCount).toBeNull();
+    expect(result.openIssueHasMore).toBe(false);
+    expect(result.attentionIssueCount).toBeNull();
+    expect(result.latestCi).toBeNull();
+    expect(result.ciState).toBe('unknown');
+    expect(result.freshness).toBe('unavailable');
+    expect(result.error?.code).toBe('not_found');
+  });
+
+  it('preserves pagination hasMore flags from source', async () => {
+    const source = new FakeGitHubProjectSource();
+    source.setRepository(sampleRepo);
+    source.setPullRequests(
+      'Sonoran-Solutions',
+      'SonoranHub',
+      [
+        {
+          number: 1,
+          title: 'PR 1',
+          draft: false,
+          updatedAt: '2026-09-18T19:00:00.000Z',
+          url: 'https://github.com/Sonoran-Solutions/SonoranHub/pull/1',
+          ciState: 'success',
+        },
+      ],
+      true, // hasMore = true
+      25,
+    );
+    source.setIssues(
+      'Sonoran-Solutions',
+      'SonoranHub',
+      [
+        {
+          number: 10,
+          title: 'Issue 10',
+          labels: ['urgent'],
+          updatedAt: '2026-09-18T18:00:00.000Z',
+          url: 'https://github.com/Sonoran-Solutions/SonoranHub/issues/10',
+          isAttention: true,
+        },
+      ],
+      true, // hasMore = true
+      55,
+    );
+
+    const adapter = new GitHubAdapter(source);
+    const result = await adapter.collectRepository({
+      owner: 'Sonoran-Solutions',
+      name: 'SonoranHub',
+      primary: true,
+      attentionLabels: ['urgent'],
+    });
+
+    expect(result.openPrCount).toBe(25);
+    expect(result.openPrHasMore).toBe(true);
+    expect(result.openIssueCount).toBe(55);
+    expect(result.openIssueHasMore).toBe(true);
+    expect(result.attentionIssueCount).toBe(1);
   });
 
   it('handles partial failures without destroying repository snapshot', async () => {
@@ -103,10 +185,13 @@ describe('GitHubAdapter', () => {
       primary: true,
       snapshot: sampleRepo,
       ciState: 'success' as const,
+      latestCi: null,
       openPullRequests: [],
       attentionIssues: [],
       openPrCount: 0,
+      openPrHasMore: false,
       openIssueCount: 0,
+      openIssueHasMore: false,
       attentionIssueCount: 0,
       freshness: 'fresh' as const,
     };
@@ -123,6 +208,7 @@ describe('GitHubAdapter', () => {
     expect(result.snapshot).toEqual(sampleRepo);
     expect(result.freshness).toBe('stale');
     expect(result.error?.code).toBe('rate_limited');
+    expect(adapter.getHealth().available).toBe(false);
   });
 
   it('enforces read-only invariant and rejects mutating methods', () => {

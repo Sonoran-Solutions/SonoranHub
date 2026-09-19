@@ -134,9 +134,9 @@ repositories with failing CI or PRs awaiting review.
 Project definitions are loaded from `config/projects.json` (customizable via
 `SONORAN_PROJECTS_PATH`). Hub synchronizes projects to PostgreSQL and refreshes
 normalized repository snapshots from GitHub via GitHub App credentials
-(`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH` or `GITHUB_APP_PRIVATE_KEY`,
-and optional `GITHUB_APP_INSTALLATION_ID`). If credentials are not configured,
+(`GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID`, and `GITHUB_PRIVATE_KEY`). If credentials are not configured,
 Hub gracefully degrades to an unconfigured state without failing API startup or
+
 breaking the UI. Test GitHub App connectivity safely with `pnpm smoke:github`.
 
 The provider refresh default is every 60 seconds and can be changed with
