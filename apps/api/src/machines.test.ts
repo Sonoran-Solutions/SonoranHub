@@ -457,6 +457,76 @@ describe('MachineHub application shutdown', () => {
 });
 
 describe('MachineHub typed action lifecycle', () => {
+  it('rejects stale action dispatch using fresh heartbeat age without creating work', async () => {
+    let now = Date.parse('2026-09-15T12:00:00.000Z');
+    const events: MachineAuditEvent[] = [];
+    const actionStore = new InMemoryMachineActionStore();
+    const hub = new MachineHub({
+      store: new InMemoryMachineStore(),
+      actionStore,
+      staleAfterMs: 1_000,
+      now: () => now,
+      eventSink: { emit: (event) => events.push(event) },
+    });
+    const socket = new FakeSocket();
+    await connectActionAgent(hub, socket);
+    expect(hub.getActiveSession('machine-actions')?.status).toBe('ONLINE');
+    const sentBeforeDispatch = socket.sent.length;
+
+    now += 1_001;
+
+    await expect(
+      hub.requestAction('machine-actions', { kind: 'repo.status', targetId: 'repo' }),
+    ).rejects.toMatchObject({ name: 'MachineActionDispatchError', code: 'machine_offline' });
+    expect(await actionStore.listForMachine('machine-actions')).toHaveLength(0);
+    expect(hub.getActiveSession('machine-actions')?.status).toBe('STALE');
+    expect(socket.sent).toHaveLength(sentBeforeDispatch);
+    expect(events.filter((event) => event.type === 'agent.stale')).toHaveLength(1);
+
+    await expect(
+      hub.requestAction('machine-actions', { kind: 'repo.status', targetId: 'repo' }),
+    ).rejects.toMatchObject({ name: 'MachineActionDispatchError', code: 'machine_offline' });
+    expect(events.filter((event) => event.type === 'agent.stale')).toHaveLength(1);
+  });
+
+  it('allows action dispatch again after a fresh heartbeat recovers a stale session', async () => {
+    let now = Date.parse('2026-09-15T12:00:00.000Z');
+    const actionStore = new InMemoryMachineActionStore();
+    const hub = new MachineHub({
+      store: new InMemoryMachineStore(),
+      actionStore,
+      staleAfterMs: 1_000,
+      now: () => now,
+    });
+    const socket = new FakeSocket();
+    await connectActionAgent(hub, socket);
+    now += 1_001;
+
+    await expect(
+      hub.requestAction('machine-actions', { kind: 'repo.status', targetId: 'repo' }),
+    ).rejects.toMatchObject({ name: 'MachineActionDispatchError', code: 'machine_offline' });
+    expect(hub.getActiveSession('machine-actions')?.status).toBe('STALE');
+
+    socket.message({
+      type: 'agent.heartbeat',
+      protocolVersion: AGENT_PROTOCOL_VERSION,
+      sequence: 2,
+      sentAt: telemetry.capturedAt,
+      telemetry,
+    });
+    await flushMessages();
+    expect(hub.getActiveSession('machine-actions')?.status).toBe('ONLINE');
+
+    const action = await hub.requestAction('machine-actions', {
+      kind: 'repo.status',
+      targetId: 'repo',
+    });
+    expect(action.status).toBe('PENDING');
+    expect(socket.sent.some((frame) => JSON.parse(frame).type === 'agent.action.request')).toBe(
+      true,
+    );
+  });
+
   it('correlates accepted and terminal results without exposing local mappings', async () => {
     const actionStore = new InMemoryMachineActionStore();
     const hub = new MachineHub({

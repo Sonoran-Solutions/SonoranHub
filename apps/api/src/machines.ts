@@ -332,7 +332,12 @@ export class MachineHub {
       throw new MachineActionDispatchError('machine_not_found', 'Machine was not found');
     const session = this.sessions.get(machineId);
     const state = session ? this.connectionStates.get(session.socket) : undefined;
-    if (!session || !state || session.status !== 'ONLINE') {
+    if (!session || !state) {
+      throw new MachineActionDispatchError('machine_offline', 'Machine is not online');
+    }
+    const currentStatus = this.statusForSession(session);
+    this.transitionStatus(session, currentStatus);
+    if (currentStatus !== 'ONLINE') {
       throw new MachineActionDispatchError('machine_offline', 'Machine is not online');
     }
     if (!state.policyRevision) {
